@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { ActionFeed } from "./action-feed";
 import { ContextPanel } from "./context-panel";
 import { JobTable } from "./job-table";
+import { KanbanBoard } from "./kanban-board";
 import { ToastContainer, showToast } from "./toast";
 import type { Job } from "@/lib/notion";
 import type {
@@ -30,6 +31,7 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [view, setView] = useState<"action" | "pipeline" | "kanban">("action");
 
   const fetchData = useCallback(async () => {
     try {
@@ -117,64 +119,105 @@ export function Dashboard() {
   const { stats, velocity, sources, statuses, healthScore, actions, appsThisWeek: weekApps } = data;
   const visibleJobs = filterDismissed(data.jobs);
 
+  // Jobs already shown in action sections
+  const shownIds = new Set([
+    ...actions.topPicks.map((j) => j.id),
+    ...actions.followUps.map((j) => j.id),
+    ...actions.review.map((j) => j.id),
+  ]);
+  const remainingJobs = visibleJobs.filter((j) => !shownIds.has(j.id));
+
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6">
+    <div className="px-12 py-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Autopilot</h1>
+          <h1 className="text-xl font-bold tracking-tight">Auto<span className="text-accent-purple">pilot</span></h1>
           <p className="text-[10px] text-muted mono">
             Updated {new Date(data.updatedAt).toLocaleTimeString()}
           </p>
         </div>
-        <button
-          onClick={fetchData}
-          className="px-3 py-1.5 text-[10px] border border-border rounded hover:bg-card transition-colors mono"
-        >
-          Refresh
-        </button>
-      </div>
-
-      {/* Split View */}
-      <div className="flex gap-4 items-start">
-        {/* Left: Action Feed (60%) */}
-        <div className="flex-[6] min-w-0">
-          <ActionFeed
-            topPicks={filterDismissed(actions.topPicks)}
-            followUps={filterDismissed(actions.followUps)}
-            review={filterDismissed(actions.review)}
-            onDismiss={handleDismiss}
-          />
-
-          {/* Full Pipeline Table */}
-          <div className="mt-6">
-            <JobTable jobs={visibleJobs} onDismiss={handleDismiss} />
+        <div className="flex items-center gap-3">
+          <div className="flex border border-border rounded-lg overflow-hidden">
+            {(["action", "pipeline", "kanban"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-4 py-2 text-xs font-medium transition-all ${
+                  view === v
+                    ? "bg-foreground text-white"
+                    : "bg-card text-muted hover:bg-background"
+                }`}
+              >
+                {v === "action" ? "Action" : v === "pipeline" ? "Pipeline" : "Kanban"}
+              </button>
+            ))}
           </div>
-        </div>
-
-        {/* Right: Context Panel (40%) */}
-        <div className="flex-[4] min-w-0 hidden md:block">
-          <ContextPanel
-            stats={stats}
-            healthScore={healthScore}
-            velocity={velocity}
-            sources={sources}
-            statuses={statuses}
-            appsThisWeek={weekApps}
-          />
+          <button
+            onClick={fetchData}
+            className="px-4 py-2 text-xs border border-border rounded-lg hover:bg-card transition-colors"
+          >
+            Refresh
+          </button>
         </div>
       </div>
 
-      {/* Mobile: Context panel below on small screens */}
-      <div className="md:hidden mt-6">
-        <ContextPanel
-          stats={stats}
-          healthScore={healthScore}
-          velocity={velocity}
-          sources={sources}
-          statuses={statuses}
-          appsThisWeek={weekApps}
-        />
+      <div key={view} className="view-transition">
+        {view === "pipeline" && (
+          <JobTable jobs={visibleJobs} onDismiss={handleDismiss} defaultExpanded />
+        )}
+
+        {view === "kanban" && (
+          <KanbanBoard jobs={visibleJobs} onDismiss={handleDismiss} />
+        )}
+
+        {view === "action" && (
+          <>
+            {/* Split View */}
+            <div className="flex gap-6 items-start">
+              {/* Left: Action Feed (60%) */}
+              <div className="flex-[6] min-w-0">
+                <ActionFeed
+                  topPicks={filterDismissed(actions.topPicks)}
+                  followUps={filterDismissed(actions.followUps)}
+                  review={filterDismissed(actions.review)}
+                  onDismiss={handleDismiss}
+                />
+              </div>
+
+              {/* Right: Context Panel (40%) */}
+              <div className="flex-[4] min-w-0 hidden md:block sticky top-4 self-start">
+                <ContextPanel
+                  stats={stats}
+                  healthScore={healthScore}
+                  velocity={velocity}
+                  sources={sources}
+                  statuses={statuses}
+                  appsThisWeek={weekApps}
+                />
+              </div>
+            </div>
+
+            {/* Remaining Jobs */}
+            {remainingJobs.length > 0 && (
+              <div className="mt-6">
+                <JobTable jobs={remainingJobs} onDismiss={handleDismiss} />
+              </div>
+            )}
+
+            {/* Mobile: Context panel below on small screens */}
+            <div className="md:hidden mt-6">
+              <ContextPanel
+                stats={stats}
+                healthScore={healthScore}
+                velocity={velocity}
+                sources={sources}
+                statuses={statuses}
+                appsThisWeek={weekApps}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       {/* Footer */}

@@ -18,11 +18,13 @@ const STATUS_COLORS: Record<string, string> = {
 export function JobTable({
   jobs,
   onDismiss,
+  defaultExpanded = false,
 }: {
   jobs: Job[];
   onDismiss: (jobId: string, reason: DismissReason) => void;
+  defaultExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [filter, setFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<"matchScore" | "dateApplied" | "dateFound">("dateFound");
 
@@ -44,7 +46,7 @@ export function JobTable({
           onClick={() => setExpanded(true)}
           className="text-xs text-muted hover:text-foreground border border-border rounded-md px-4 py-2 hover:bg-card transition-colors"
         >
-          View Full Pipeline ({jobs.length} jobs)
+          View Remaining Jobs ({jobs.length})
         </button>
       </div>
     );
@@ -103,7 +105,7 @@ export function JobTable({
                 <td className="px-3 py-2 text-muted max-w-[140px] truncate">{job.role}</td>
                 <td className="px-3 py-2 mono">
                   {job.matchScore !== null ? (
-                    <span className={job.matchScore >= 8 ? "text-accent-green font-bold" : ""}>{job.matchScore}/10</span>
+                    <span className={job.matchScore >= 8 ? "text-accent-purple font-bold" : ""}>{job.matchScore}/10</span>
                   ) : <span className="text-muted">--</span>}
                 </td>
                 <td className="px-3 py-2">

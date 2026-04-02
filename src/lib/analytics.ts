@@ -130,11 +130,11 @@ export type StatusCount = { status: string; count: number; color: string };
 export function statusBreakdown(jobs: Job[]): StatusCount[] {
   const colorMap: Record<string, string> = {
     New: "#a3a3a3",
-    Reviewing: "#facc15",
-    Applied: "#00FF66",
-    Rejected: "#FF3B3B",
-    Interview: "#3b82f6",
-    Offer: "#a855f7",
+    Reviewing: "#BA7517",
+    Applied: "#1D9E75",
+    Rejected: "#D85A30",
+    Interview: "#534AB7",
+    Offer: "#1D9E75",
   };
   const counts = new Map<string, number>();
   for (const job of jobs) {
@@ -201,10 +201,10 @@ export function computeHealthScore(jobs: Job[]): HealthScore {
 
   let label: string;
   let color: string;
-  if (score >= 80) { label = "On Track"; color = "#00FF66"; }
-  else if (score >= 60) { label = "Keep Going"; color = "#00FF66"; }
-  else if (score >= 40) { label = "Needs Attention"; color = "#FF3B3B"; }
-  else { label = "Critical"; color = "#FF3B3B"; }
+  if (score >= 80) { label = "On Track"; color = "#1D9E75"; }
+  else if (score >= 60) { label = "Keep Going"; color = "#534AB7"; }
+  else if (score >= 40) { label = "Needs Attention"; color = "#D85A30"; }
+  else { label = "Critical"; color = "#D85A30"; }
 
   return { score, label, color, diagnosis: diagnoses.join(" · ") || "Looking good" };
 }

@@ -58,14 +58,14 @@ function VelocityMini({ data }: { data: WeeklyData[] }) {
         <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
         <XAxis dataKey="week" tick={{ fontSize: 7, fill: "#999" }} />
         <YAxis tick={{ fontSize: 8, fill: "#999" }} allowDecimals={false} />
-        <Area type="monotone" dataKey="count" stroke="#00FF66" fill="#00FF6620" strokeWidth={1.5} />
+        <Area type="monotone" dataKey="count" stroke="#534AB7" fill="#534AB720" strokeWidth={1.5} />
       </AreaChart>
     </ResponsiveContainer>
   );
 }
 
 function SourcesMini({ data }: { data: SourceEffectiveness[] }) {
-  const colors = ["#3b82f6", "#00FF66", "#a855f7", "#f97316", "#FF3B3B", "#737373"];
+  const colors = ["#534AB7", "#1D9E75", "#D85A30", "#BA7517", "#888880", "#737373"];
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={data} layout="vertical" margin={{ left: 40, right: 4, top: 4, bottom: 0 }}>
@@ -83,7 +83,7 @@ function SourcesMini({ data }: { data: SourceEffectiveness[] }) {
 
 function WeeklyGoal({ current, target }: { current: number; target: number }) {
   const pct = Math.min(100, (current / target) * 100);
-  const color = pct >= 100 ? "#00FF66" : pct >= 50 ? "#facc15" : "#FF3B3B";
+  const color = pct >= 100 ? "#1D9E75" : pct >= 50 ? "#BA7517" : "#D85A30";
   return (
     <div className="flex flex-col items-center justify-center h-full gap-2">
       <p className="text-[9px] text-muted">

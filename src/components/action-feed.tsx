@@ -20,11 +20,11 @@ export function ActionFeed({
 }) {
   return (
     <div className="space-y-6">
-      {topPicks.length > 0 && (
+      {review.length > 0 && (
         <ActionSection
-          title="Top Picks"
-          subtitle="High priority, ready to apply"
-          items={topPicks}
+          title="New Today"
+          subtitle="Recently found, needs review"
+          items={review}
           onDismiss={onDismiss}
         />
       )}
@@ -36,11 +36,11 @@ export function ActionFeed({
           onDismiss={onDismiss}
         />
       )}
-      {review.length > 0 && (
+      {topPicks.length > 0 && (
         <ActionSection
-          title="New Today"
-          subtitle="Recently found, needs review"
-          items={review}
+          title="Top Picks"
+          subtitle="High priority, ready to apply"
+          items={topPicks}
           onDismiss={onDismiss}
         />
       )}
@@ -53,7 +53,7 @@ export function ActionFeed({
   );
 }
 
-function ActionSection({
+export function ActionSection({
   title,
   subtitle,
   items,
@@ -65,7 +65,7 @@ function ActionSection({
   onDismiss: (jobId: string, reason: DismissReason) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const visible = showAll ? items : items.slice(0, 5);
+  const visible = showAll ? items : items.slice(0, 4);
 
   return (
     <div>
@@ -74,16 +74,16 @@ function ActionSection({
         <p className="text-[9px] text-muted">{subtitle}</p>
       </div>
       <div className="space-y-2">
-        {visible.map((item) => (
-          <ActionCard key={item.id} item={item} onDismiss={onDismiss} />
+        {visible.map((item, i) => (
+          <ActionCard key={item.id} item={item} index={i} onDismiss={onDismiss} />
         ))}
       </div>
-      {items.length > 5 && (
+      {items.length > 4 && (
         <button
           className="text-[10px] text-muted hover:text-foreground mt-2 transition-colors"
           onClick={() => setShowAll(!showAll)}
         >
-          {showAll ? "Show less" : `+ ${items.length - 5} more`}
+          {showAll ? "Show less" : `+ ${items.length - 4} more`}
         </button>
       )}
     </div>
@@ -92,9 +92,11 @@ function ActionSection({
 
 function ActionCard({
   item,
+  index,
   onDismiss,
 }: {
   item: ActionItem;
+  index: number;
   onDismiss: (jobId: string, reason: DismissReason) => void;
 }) {
   const now = new Date();
@@ -104,49 +106,63 @@ function ActionCard({
       ? differenceInDays(now, parseISO(item.dateFound))
       : null;
 
+  const matchColor =
+    item.matchScore !== null
+      ? item.matchScore >= 9
+        ? "#1D9E75"
+        : item.matchScore >= 7
+          ? "#BA7517"
+          : "#D85A30"
+      : undefined;
+
   return (
-    <div className="border border-border rounded-md px-3 py-2.5 flex items-center justify-between gap-3 hover:bg-neutral-50 transition-colors">
-      <div className="min-w-0">
-        <p className="text-xs font-semibold truncate">{item.company || item.name}</p>
-        <p className="text-[10px] text-muted truncate">
-          {item.role}
-          {item.matchScore !== null && (
-            <span className={`ml-1.5 mono font-bold ${item.matchScore >= 8 ? "text-accent-green" : ""}`}>
-              {item.matchScore}/10
+    <div className={`border border-border rounded-xl bg-card px-4 py-3 card-hover animate-fade-up stagger-${Math.min(index + 1, 5)}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-semibold truncate">{item.company || item.name}</p>
+            {item.matchScore !== null && (
+              <span className="mono text-xs font-bold shrink-0" style={{ color: matchColor }}>
+                {item.matchScore * 10}%
+              </span>
+            )}
+          </div>
+          <p className="text-[10px] text-muted truncate mt-0.5">{item.role}</p>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {item.actionType === "apply" && item.applyLink && (
+            <a
+              href={item.applyLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-accent-purple text-white px-2.5 py-0.5 rounded text-[10px] font-semibold hover:brightness-90 transition"
+            >
+              Apply
+            </a>
+          )}
+          {item.actionType === "follow_up" && (
+            <span className="bg-blue-50 text-blue-600 px-2.5 py-0.5 rounded text-[10px] font-semibold">
+              Follow Up
             </span>
           )}
-          {daysAgo !== null && (
-            <span className="ml-1.5 mono">{daysAgo}d ago</span>
+          {item.actionType === "review" && item.applyLink && (
+            <a
+              href={item.applyLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-neutral-100 text-foreground px-2.5 py-0.5 rounded text-[10px] font-semibold hover:bg-neutral-200 transition"
+            >
+              View
+            </a>
           )}
-        </p>
+          <DismissButton onDismiss={(reason) => onDismiss(item.id, reason)} />
+        </div>
       </div>
-      <div className="flex items-center gap-1.5 shrink-0">
-        {item.actionType === "apply" && item.applyLink && (
-          <a
-            href={item.applyLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="bg-accent-green text-black px-2.5 py-0.5 rounded text-[10px] font-semibold hover:brightness-90 transition"
-          >
-            Apply
-          </a>
-        )}
-        {item.actionType === "follow_up" && (
-          <span className="bg-blue-50 text-blue-600 px-2.5 py-0.5 rounded text-[10px] font-semibold">
-            Follow Up
-          </span>
-        )}
-        {item.actionType === "review" && item.applyLink && (
-          <a
-            href={item.applyLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="bg-neutral-100 text-foreground px-2.5 py-0.5 rounded text-[10px] font-semibold hover:bg-neutral-200 transition"
-          >
-            View
-          </a>
-        )}
-        <DismissButton onDismiss={(reason) => onDismiss(item.id, reason)} />
+      <div className="flex items-center gap-3 mt-2 text-[9px] mono text-muted">
+        {item.location && <span className="truncate max-w-[160px]">{item.location}</span>}
+        {item.source && <span>{item.source}</span>}
+        {item.salaryRange && <span>{item.salaryRange}</span>}
+        {daysAgo !== null && <span>{daysAgo}d ago</span>}
       </div>
     </div>
   );

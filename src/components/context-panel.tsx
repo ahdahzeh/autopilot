@@ -23,21 +23,21 @@ export function ContextPanel({
 }) {
   const funnelData = [
     { label: "Found", count: stats.total, max: stats.total, color: "#a3a3a3" },
-    { label: "Applied", count: stats.applied, max: stats.total, color: "#00FF66" },
-    { label: "Interview", count: stats.interviews, max: stats.total, color: "#3b82f6" },
-    { label: "Offer", count: stats.offers, max: stats.total, color: "#a855f7" },
+    { label: "Applied", count: stats.applied, max: stats.total, color: "#1D9E75" },
+    { label: "Interview", count: stats.interviews, max: stats.total, color: "#534AB7" },
+    { label: "Offer", count: stats.offers, max: stats.total, color: "#BA7517" },
   ];
 
   return (
-    <div className="bg-card rounded-lg border border-border p-4 sticky top-4">
+    <div className="bg-card rounded-2xl border border-border p-5 sticky top-4 animate-fade-up">
       <HealthScore data={healthScore} />
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 gap-1.5 mb-4">
         <StatBox label="Total" value={stats.total} />
-        <StatBox label="Applied" value={stats.applied} color="#00FF66" />
+        <StatBox label="Applied" value={stats.applied} color="#1D9E75" />
         <StatBox label="Response" value={`${stats.responseRate.toFixed(1)}%`} />
-        <StatBox label="Interviews" value={stats.interviews} color="#00FF66" />
+        <StatBox label="Interviews" value={stats.interviews} color="#534AB7" />
       </div>
 
       <MiniFunnel data={funnelData} />
@@ -59,6 +59,15 @@ export function ContextPanel({
       </div>
 
       <ChartTabs velocity={velocity} sources={sources} appsThisWeek={appsThisWeek} weeklyTarget={10} />
+
+      {/* Bouncing scroll hint */}
+      <div className="flex justify-center pt-3">
+        <div className="animate-soft-bounce text-muted">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+      </div>
     </div>
   );
 }
