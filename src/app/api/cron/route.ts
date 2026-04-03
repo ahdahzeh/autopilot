@@ -1,45 +1,68 @@
-import { fetchJobs } from "@/lib/notion";
-import { computeStats } from "@/lib/analytics";
+import { createServiceClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  // Verify cron secret in production
   const authHeader = request.headers.get("authorization");
   if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const jobs = await fetchJobs();
-  const stats = computeStats(jobs);
+  const supabase = createServiceClient();
 
-  const alerts: string[] = [];
+  const { data: users, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("onboarded", true);
 
-  if (stats.staleJobs.length > 0) {
-    alerts.push(`${stats.staleJobs.length} stale job(s) found >3 days ago but not applied to: ${stats.staleJobs.map((j) => j.company).join(", ")}`);
+  if (error || !users) {
+    return Response.json({ error: "Failed to fetch users" }, { status: 500 });
   }
 
-  if (stats.followUps.length > 0) {
-    alerts.push(`${stats.followUps.length} application(s) with no response after 7+ days: ${stats.followUps.map((j) => j.company).join(", ")}`);
-  }
+  const results = [];
 
-  if (stats.highPriority > 0) {
-    alerts.push(`${stats.highPriority} high-priority job(s) still need attention`);
-  }
+  for (const user of users) {
+    const today = new Date().toISOString().split("T")[0];
+    const { count } = await supabase
+      .from("jobs")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("date_found", today);
 
-  // Send push notification if we have subscribers
-  // For now, log the alerts — push notification integration comes next
-  console.log("Cron alerts:", alerts);
+    const remaining = user.daily_job_limit - (count || 0);
+    if (remaining <= 0) {
+      results.push({ user_id: user.id, skipped: true, reason: "daily limit reached" });
+      continue;
+    }
+
+    if (process.env.RAILWAY_SCRAPER_URL) {
+      try {
+        const res = await fetch(`${process.env.RAILWAY_SCRAPER_URL}/scrape`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: user.id,
+            target_titles: user.target_titles,
+            target_locations: user.target_locations,
+            salary_floor: user.salary_floor,
+            excluded_companies: user.excluded_companies,
+            sources: user.sources,
+            daily_job_limit: remaining,
+          }),
+        });
+        const data = await res.json();
+        results.push({ user_id: user.id, ...data });
+      } catch (err) {
+        results.push({ user_id: user.id, error: String(err) });
+      }
+    } else {
+      results.push({ user_id: user.id, skipped: true, reason: "no scraper URL configured" });
+    }
+  }
 
   return Response.json({
-    ok: true,
-    alertCount: alerts.length,
-    alerts,
-    stats: {
-      total: stats.total,
-      applied: stats.applied,
-      interviews: stats.interviews,
-      responseRate: stats.responseRate,
-    },
+    processed: users.length,
+    results,
+    timestamp: new Date().toISOString(),
   });
 }

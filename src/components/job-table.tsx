@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Job } from "@/lib/notion";
+import type { Job } from "@/lib/types";
 import { DismissButton } from "./dismiss-menu";
 
 type DismissReason = "expired" | "scam" | "not_interested" | "applied_elsewhere";

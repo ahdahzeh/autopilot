@@ -1,6 +1,8 @@
 "use client";
 
-import type { Job } from "@/lib/notion";
+import { useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import type { Job } from "@/lib/types";
 import { DismissButton } from "./dismiss-menu";
 
 type DismissReason = "expired" | "scam" | "not_interested" | "applied_elsewhere";
@@ -75,6 +77,7 @@ function KanbanCard({
   job: Job;
   onDismiss: (jobId: string, reason: DismissReason) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const initial = (job.company || job.name || "?")[0].toUpperCase();
   const avatarColor = getAvatarColor(job.company || job.name);
   const matchPct = job.matchScore !== null ? `${job.matchScore * 10}%` : null;
@@ -88,7 +91,10 @@ function KanbanCard({
       : undefined;
 
   return (
-    <div className="bg-card border border-border rounded-xl p-3 card-hover group">
+    <div
+      className="bg-card border border-border rounded-xl p-3 card-hover group cursor-pointer"
+      onClick={() => setExpanded(!expanded)}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-2.5 min-w-0">
           <div
@@ -120,28 +126,61 @@ function KanbanCard({
         </div>
       </div>
 
-      <div className="flex items-center gap-2 mt-2">
-        {job.applyLink && (
-          <a
-            href={job.applyLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[9px] text-muted hover:text-foreground mono transition-colors"
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="overflow-hidden"
           >
-            Resume ↗
-          </a>
+            <div className="border-t border-border mt-2.5 pt-2.5 space-y-1.5">
+              {job.source && (
+                <div className="flex justify-between text-[9px]">
+                  <span className="text-muted">Source</span>
+                  <span className="mono">{job.source}</span>
+                </div>
+              )}
+              {job.salaryRange && (
+                <div className="flex justify-between text-[9px]">
+                  <span className="text-muted">Salary</span>
+                  <span className="mono">{job.salaryRange}</span>
+                </div>
+              )}
+              {job.priority && (
+                <div className="flex justify-between text-[9px]">
+                  <span className="text-muted">Priority</span>
+                  <span className="mono">{job.priority}</span>
+                </div>
+              )}
+              {job.outcome && (
+                <div className="flex justify-between text-[9px]">
+                  <span className="text-muted">Outcome</span>
+                  <span className="mono">{job.outcome}</span>
+                </div>
+              )}
+              {job.industry && (
+                <div className="flex justify-between text-[9px]">
+                  <span className="text-muted">Industry</span>
+                  <span className="mono">{job.industry}</span>
+                </div>
+              )}
+              {job.applyLink && (
+                <a
+                  href={job.applyLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="block text-[9px] text-accent-purple hover:underline mono mt-1"
+                >
+                  View Listing ↗
+                </a>
+              )}
+            </div>
+          </motion.div>
         )}
-        {job.applyLink && (
-          <a
-            href={job.applyLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[9px] text-muted hover:text-foreground mono transition-colors"
-          >
-            Letter ↗
-          </a>
-        )}
-      </div>
+      </AnimatePresence>
     </div>
   );
 }

@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { ActionFeed } from "./action-feed";
 import { ContextPanel } from "./context-panel";
 import { JobTable } from "./job-table";
 import { KanbanBoard } from "./kanban-board";
 import { ToastContainer, showToast } from "./toast";
-import type { Job } from "@/lib/notion";
+import { AddJobModal } from "./add-job-modal";
+import { createClient } from "@/lib/supabase/client";
+import type { Job } from "@/lib/types";
 import type {
   Stats, WeeklyData, SourceEffectiveness, StatusCount, ActionItem,
 } from "@/lib/analytics";
@@ -32,6 +35,16 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"action" | "pipeline" | "kanban">("action");
+  const [direction, setDirection] = useState(0);
+  const [showAddJob, setShowAddJob] = useState(false);
+
+  const viewOrder = ["action", "pipeline", "kanban"] as const;
+  const switchView = (next: typeof view) => {
+    const from = viewOrder.indexOf(view);
+    const to = viewOrder.indexOf(next);
+    setDirection(to > from ? 1 : -1);
+    setView(next);
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -142,7 +155,7 @@ export function Dashboard() {
             {(["action", "pipeline", "kanban"] as const).map((v) => (
               <button
                 key={v}
-                onClick={() => setView(v)}
+                onClick={() => switchView(v)}
                 className={`px-4 py-2 text-xs font-medium transition-all ${
                   view === v
                     ? "bg-foreground text-white"
@@ -154,39 +167,78 @@ export function Dashboard() {
             ))}
           </div>
           <button
+            onClick={() => setShowAddJob(true)}
+            className="px-4 py-2 text-xs border border-border rounded-lg hover:bg-card transition-colors"
+          >
+            + Add Job
+          </button>
+          <button
             onClick={fetchData}
             className="px-4 py-2 text-xs border border-border rounded-lg hover:bg-card transition-colors"
           >
             Refresh
           </button>
+          <a
+            href="/settings"
+            className="px-4 py-2 text-xs text-muted hover:text-foreground transition-colors"
+          >
+            Settings
+          </a>
         </div>
       </div>
 
-      <div key={view} className="view-transition">
-        {view === "pipeline" && (
-          <JobTable jobs={visibleJobs} onDismiss={handleDismiss} defaultExpanded />
-        )}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={view}
+          initial={{ opacity: 0, scale: 0.97, filter: "blur(4px)" }}
+          animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+          exit={{ opacity: 0, scale: 1.03, filter: "blur(4px)" }}
+          transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+        >
+          {view === "pipeline" && (
+            <JobTable jobs={visibleJobs} onDismiss={handleDismiss} defaultExpanded />
+          )}
 
-        {view === "kanban" && (
-          <KanbanBoard jobs={visibleJobs} onDismiss={handleDismiss} />
-        )}
+          {view === "kanban" && (
+            <KanbanBoard jobs={visibleJobs} onDismiss={handleDismiss} />
+          )}
 
-        {view === "action" && (
-          <>
-            {/* Split View */}
-            <div className="flex gap-6 items-start">
-              {/* Left: Action Feed (60%) */}
-              <div className="flex-[6] min-w-0">
-                <ActionFeed
-                  topPicks={filterDismissed(actions.topPicks)}
-                  followUps={filterDismissed(actions.followUps)}
-                  review={filterDismissed(actions.review)}
-                  onDismiss={handleDismiss}
-                />
+          {view === "action" && (
+            <>
+              {/* Split View */}
+              <div className="flex gap-6 items-start">
+                {/* Left: Action Feed (60%) */}
+                <div className="flex-[6] min-w-0">
+                  <ActionFeed
+                    topPicks={filterDismissed(actions.topPicks)}
+                    followUps={filterDismissed(actions.followUps)}
+                    review={filterDismissed(actions.review)}
+                    onDismiss={handleDismiss}
+                  />
+                </div>
+
+                {/* Right: Context Panel (40%) */}
+                <div className="flex-[4] min-w-0 hidden md:block sticky top-4 self-start">
+                  <ContextPanel
+                    stats={stats}
+                    healthScore={healthScore}
+                    velocity={velocity}
+                    sources={sources}
+                    statuses={statuses}
+                    appsThisWeek={weekApps}
+                  />
+                </div>
               </div>
 
-              {/* Right: Context Panel (40%) */}
-              <div className="flex-[4] min-w-0 hidden md:block sticky top-4 self-start">
+              {/* Remaining Jobs */}
+              {remainingJobs.length > 0 && (
+                <div className="mt-6">
+                  <JobTable jobs={remainingJobs} onDismiss={handleDismiss} />
+                </div>
+              )}
+
+              {/* Mobile: Context panel below on small screens */}
+              <div className="md:hidden mt-6">
                 <ContextPanel
                   stats={stats}
                   healthScore={healthScore}
@@ -196,37 +248,19 @@ export function Dashboard() {
                   appsThisWeek={weekApps}
                 />
               </div>
-            </div>
-
-            {/* Remaining Jobs */}
-            {remainingJobs.length > 0 && (
-              <div className="mt-6">
-                <JobTable jobs={remainingJobs} onDismiss={handleDismiss} />
-              </div>
-            )}
-
-            {/* Mobile: Context panel below on small screens */}
-            <div className="md:hidden mt-6">
-              <ContextPanel
-                stats={stats}
-                healthScore={healthScore}
-                velocity={velocity}
-                sources={sources}
-                statuses={statuses}
-                appsThisWeek={weekApps}
-              />
-            </div>
-          </>
-        )}
-      </div>
+            </>
+          )}
+        </motion.div>
+      </AnimatePresence>
 
       {/* Footer */}
       <div className="text-center py-6">
         <p className="text-[9px] text-muted mono uppercase tracking-widest">
-          Autopilot v2.0 — Synced from Notion
+          Autopilot v3.0
         </p>
       </div>
 
+      <AddJobModal open={showAddJob} onClose={() => setShowAddJob(false)} onAdded={fetchData} />
       <ToastContainer />
     </div>
   );

@@ -1,4 +1,4 @@
-import type { Job } from "./notion";
+import type { Job } from "./types";
 import { differenceInDays, parseISO, startOfWeek, format } from "date-fns";
 
 export type Stats = {
