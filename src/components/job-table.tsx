@@ -54,7 +54,7 @@ export function JobTable({
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      <div className="flex items-center justify-between p-3 border-b border-border">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 p-3 border-b border-border">
         <h3 className="text-[10px] uppercase tracking-widest text-muted">
           Pipeline <span className="mono">({filtered.length})</span>
         </h3>

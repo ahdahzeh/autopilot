@@ -43,9 +43,9 @@ export function KanbanBoard({
   }));
 
   return (
-    <div className="flex gap-4 pb-4" style={{ minHeight: "70vh" }}>
+    <div className="flex gap-3 md:gap-4 pb-4 overflow-x-auto" style={{ minHeight: "70vh" }}>
       {columns.map((col) => (
-        <div key={col.status} className="flex-1 min-w-0">
+        <div key={col.status} className="flex-1 min-w-[200px] sm:min-w-0">
           <div className="flex items-center gap-2 mb-3 px-1">
             <div
               className="w-2 h-2 rounded-full"

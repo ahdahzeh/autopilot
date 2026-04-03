@@ -45,7 +45,7 @@ export function AddJobModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-xl animate-fade-up">
+      <div className="relative bg-card border border-border rounded-2xl p-4 sm:p-6 w-full max-w-md mx-4 sm:mx-0 shadow-xl animate-fade-up">
         <h2 className="text-sm font-bold mb-4">Add Job</h2>
         <form onSubmit={handleSubmit} className="space-y-3">
           <Field label="Company" value={company} onChange={setCompany} required />

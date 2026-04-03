@@ -141,22 +141,22 @@ export function Dashboard() {
   const remainingJobs = visibleJobs.filter((j) => !shownIds.has(j.id));
 
   return (
-    <div className="px-12 py-6">
+    <div className="px-4 md:px-8 lg:px-12 py-4 md:py-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Auto<span className="text-accent-purple">pilot</span></h1>
           <p className="text-[10px] text-muted mono">
             Updated {new Date(data.updatedAt).toLocaleTimeString()}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
           <div className="flex border border-border rounded-lg overflow-hidden">
             {(["action", "pipeline", "kanban"] as const).map((v) => (
               <button
                 key={v}
                 onClick={() => switchView(v)}
-                className={`px-4 py-2 text-xs font-medium transition-all ${
+                className={`px-3 sm:px-4 py-2 text-xs font-medium transition-all ${
                   view === v
                     ? "bg-foreground text-white"
                     : "bg-card text-muted hover:bg-background"
@@ -168,19 +168,19 @@ export function Dashboard() {
           </div>
           <button
             onClick={() => setShowAddJob(true)}
-            className="px-4 py-2 text-xs border border-border rounded-lg hover:bg-card transition-colors"
+            className="px-3 sm:px-4 py-2 text-xs border border-border rounded-lg hover:bg-card transition-colors"
           >
             + Add Job
           </button>
           <button
             onClick={fetchData}
-            className="px-4 py-2 text-xs border border-border rounded-lg hover:bg-card transition-colors"
+            className="px-3 sm:px-4 py-2 text-xs border border-border rounded-lg hover:bg-card transition-colors"
           >
             Refresh
           </button>
           <a
             href="/settings"
-            className="px-4 py-2 text-xs text-muted hover:text-foreground transition-colors"
+            className="px-3 sm:px-4 py-2 text-xs text-muted hover:text-foreground transition-colors"
           >
             Settings
           </a>
@@ -206,9 +206,9 @@ export function Dashboard() {
           {view === "action" && (
             <>
               {/* Split View */}
-              <div className="flex gap-6 items-start">
+              <div className="flex flex-col md:flex-row gap-4 md:gap-6 items-start">
                 {/* Left: Action Feed (60%) */}
-                <div className="flex-[6] min-w-0">
+                <div className="flex-[6] min-w-0 w-full md:w-auto">
                   <ActionFeed
                     topPicks={filterDismissed(actions.topPicks)}
                     followUps={filterDismissed(actions.followUps)}

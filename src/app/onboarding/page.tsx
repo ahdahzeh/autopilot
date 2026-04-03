@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
+import { ResumeUpload } from "@/components/resume-upload";
 
 const SOURCES = [
   { id: "linkedin", label: "LinkedIn" },
@@ -26,6 +27,9 @@ export default function OnboardingPage() {
   const [sources, setSources] = useState<string[]>(["linkedin", "builtin"]);
   const [dailyLimit, setDailyLimit] = useState(20);
   const [excludedCompanies, setExcludedCompanies] = useState("");
+  const [resumeUploaded, setResumeUploaded] = useState(false);
+  const [resumeLength, setResumeLength] = useState(0);
+  const [gmailConnected, setGmailConnected] = useState(false);
 
   const router = useRouter();
   const supabase = createClient();
@@ -50,6 +54,19 @@ export default function OnboardingPage() {
         setDailyLimit(profile.daily_job_limit || 20);
         setExcludedCompanies(profile.excluded_companies?.join(", ") || "");
         setPrefilled(true);
+      }
+      if (profile?.resume_text?.length > 0) {
+        setResumeUploaded(true);
+        setResumeLength(profile.resume_text.length);
+      }
+      if (profile?.gmail_connected) {
+        setGmailConnected(true);
+      }
+      // Check if returning from Gmail OAuth
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("gmail") === "connected") {
+        setGmailConnected(true);
+        window.history.replaceState({}, "", "/onboarding");
       }
     }
     loadProfile();
@@ -219,7 +236,47 @@ export default function OnboardingPage() {
       />
     </div>,
 
-    // Step 7: Review
+    // Step 7: Resume (required)
+    <div key="resume" className="space-y-4">
+      <div>
+        <h2 className="text-sm font-bold">Upload your resume</h2>
+        <p className="text-[10px] text-muted mt-1">
+          Required — we use this to score how well each job matches your background and extract keywords for smarter scraping.
+        </p>
+      </div>
+      <ResumeUpload
+        onUploaded={(len) => { setResumeUploaded(true); setResumeLength(len); }}
+        existingLength={resumeLength}
+      />
+      {resumeUploaded && (
+        <p className="text-[10px] text-accent-green mono">
+          ✓ Resume saved — {resumeLength.toLocaleString()} characters extracted
+        </p>
+      )}
+    </div>,
+
+    // Step 8: Gmail connect (required)
+    <div key="gmail" className="space-y-4">
+      <div>
+        <h2 className="text-sm font-bold">Connect Gmail</h2>
+        <p className="text-[10px] text-muted mt-1">
+          Required. We read your inbox daily to auto-update your pipeline when you get interview requests, rejections, or offers — so you never miss a response.
+        </p>
+      </div>
+      <a
+        href="/api/gmail/connect?origin=onboarding"
+        className="flex items-center gap-3 px-4 py-3 border border-accent-purple rounded-xl hover:bg-accent-purple/5 transition-colors w-full"
+      >
+        <span className="text-xl">📬</span>
+        <div className="text-left">
+          <p className="text-sm font-semibold">Connect Google Account</p>
+          <p className="text-[10px] text-muted">Read-only access · OAuth secured by Google</p>
+        </div>
+      </a>
+      <p className="text-[10px] text-muted">We never send emails or store message content — only subject lines are scanned to detect status changes.</p>
+    </div>,
+
+    // Step 9: Review
     <div key="review" className="space-y-4">
       <h2 className="text-sm font-bold">Review your setup</h2>
       <div className="bg-card border border-border rounded-xl p-4 space-y-3 text-xs">
@@ -229,10 +286,18 @@ export default function OnboardingPage() {
         <Row label="Sources" value={sources.map((s) => SOURCES.find((x) => x.id === s)?.label).join(", ")} />
         <Row label="Daily Limit" value={`${dailyLimit} jobs/day`} />
         <Row label="Excluded" value={excludedCompanies || "None"} />
+        <Row label="Resume" value={resumeUploaded ? `✓ Uploaded (${resumeLength.toLocaleString()} chars)` : "⚠ Not uploaded"} />
+        <Row label="Gmail" value={gmailConnected ? "✓ Connected" : "⚠ Not connected"} />
       </div>
+      {!resumeUploaded && (
+        <p className="text-xs text-accent-red">Please upload your resume before continuing.</p>
+      )}
+      {!gmailConnected && (
+        <p className="text-xs text-accent-red">Please connect Gmail before continuing.</p>
+      )}
       <button
         onClick={handleComplete}
-        disabled={loading || !titles.trim()}
+        disabled={loading || !titles.trim() || !resumeUploaded || !gmailConnected}
         className="w-full py-2.5 text-sm font-semibold rounded-lg bg-accent-purple text-white hover:opacity-90 transition disabled:opacity-50"
       >
         {loading ? "Setting up..." : "Start My Pipeline"}

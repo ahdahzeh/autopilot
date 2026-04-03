@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
+import { ResumeUpload } from "@/components/resume-upload";
 
 const SOURCES = [
   { id: "linkedin", label: "LinkedIn" },
@@ -28,6 +29,8 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [resumeLength, setResumeLength] = useState(0);
 
   // Profile fields
   const [displayName, setDisplayName] = useState("");
@@ -46,6 +49,15 @@ export default function SettingsPage() {
 
   const router = useRouter();
   const supabase = createClient();
+
+  // Handle OAuth redirect result
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("gmail") === "connected") {
+      setGmailConnected(true);
+      window.history.replaceState({}, "", "/settings");
+    }
+  }, []);
 
   useEffect(() => {
     async function load() {
@@ -67,6 +79,8 @@ export default function SettingsPage() {
         setDailyLimit(profile.daily_job_limit || 20);
         setExcludedCompanies(profile.excluded_companies?.join(", ") || "");
         setIsAdmin(profile.is_admin || false);
+        setGmailConnected(profile.gmail_connected || false);
+        setResumeLength(profile.resume_text?.length || 0);
       }
 
       if (profile?.is_admin) {
@@ -154,7 +168,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen px-12 py-6" style={{ background: "var(--background)" }}>
+    <div className="min-h-screen px-4 md:px-8 lg:px-12 py-4 md:py-6" style={{ background: "var(--background)" }}>
       <div className="max-w-2xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
@@ -229,7 +243,7 @@ export default function SettingsPage() {
 
         {/* Sources */}
         <Section title="Job Sources">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {SOURCES.map((s) => (
               <button
                 key={s.id}
@@ -318,7 +332,7 @@ export default function SettingsPage() {
                 {inviteCodes.map((ic) => (
                   <div
                     key={ic.id}
-                    className="flex items-center justify-between px-4 py-3 border border-border rounded-xl bg-card"
+                    className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 px-4 py-3 border border-border rounded-xl bg-card"
                   >
                     <div>
                       <span className="mono text-sm font-bold tracking-wider">{ic.code}</span>
@@ -344,7 +358,50 @@ export default function SettingsPage() {
           </Section>
         )}
 
-        {/* Danger Zone */}
+        {/* Resume */}
+        <Section title="Resume">
+          <p className="text-[10px] text-muted mb-3">
+            Used to score job matches and extract keywords for smarter scraping.
+          </p>
+          <ResumeUpload
+            onUploaded={(len) => setResumeLength(len)}
+            existingLength={resumeLength}
+          />
+        </Section>
+
+        {/* Gmail */}
+        <Section title="Gmail Sync">
+          {gmailConnected ? (
+            <div className="flex items-center justify-between px-4 py-3 border border-border rounded-xl bg-card">
+              <div className="flex items-center gap-3">
+                <span className="text-xl">📬</span>
+                <div>
+                  <p className="text-sm font-semibold">Gmail Connected</p>
+                  <p className="text-[10px] text-muted">Pipeline updates automatically from your inbox</p>
+                </div>
+              </div>
+              <span className="text-[10px] text-accent-green font-medium mono">Active</span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-[10px] text-muted">
+                Connect Gmail to auto-update job statuses when you get interview requests, rejections, or offers.
+              </p>
+              <a
+                href="/api/gmail/connect"
+                className="flex items-center gap-3 px-4 py-3 border border-border rounded-xl hover:bg-card transition-colors"
+              >
+                <span className="text-xl">📬</span>
+                <div>
+                  <p className="text-sm font-semibold">Connect Gmail</p>
+                  <p className="text-[10px] text-muted">Read-only access · OAuth secured</p>
+                </div>
+              </a>
+            </div>
+          )}
+        </Section>
+
+        {/* Account */}
         <Section title="Account">
           <button
             onClick={async () => {

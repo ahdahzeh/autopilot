@@ -12,7 +12,7 @@ export async function GET(request: Request) {
 
   const { data: users, error } = await supabase
     .from("profiles")
-    .select("*")
+    .select("*, resume_text")
     .eq("onboarded", true);
 
   if (error || !users) {
@@ -48,6 +48,7 @@ export async function GET(request: Request) {
             excluded_companies: user.excluded_companies,
             sources: user.sources,
             daily_job_limit: remaining,
+            resume_text: user.resume_text || "",
           }),
         });
         const data = await res.json();
@@ -58,6 +59,16 @@ export async function GET(request: Request) {
     } else {
       results.push({ user_id: user.id, skipped: true, reason: "no scraper URL configured" });
     }
+  }
+
+  // Gmail sync — runs in parallel after scraping
+  try {
+    await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/gmail/sync`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+    });
+  } catch (err) {
+    console.error("Gmail sync failed:", err);
   }
 
   return Response.json({

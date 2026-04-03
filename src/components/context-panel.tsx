@@ -33,7 +33,7 @@ export function ContextPanel({
       <HealthScore data={healthScore} />
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 gap-1.5 mb-4">
+      <div className="grid grid-cols-2 gap-1.5 mb-4 min-w-0">
         <StatBox label="Total" value={stats.total} />
         <StatBox label="Applied" value={stats.applied} color="#1D9E75" />
         <StatBox label="Response" value={`${stats.responseRate.toFixed(1)}%`} />

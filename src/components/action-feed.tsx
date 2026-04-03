@@ -159,7 +159,7 @@ function ActionCard({
         </div>
       </div>
       <div className="flex items-center gap-3 mt-2 text-[9px] mono text-muted">
-        {item.location && <span className="truncate max-w-[160px]">{item.location}</span>}
+        {item.location && <span className="truncate max-w-[100px] sm:max-w-[160px]">{item.location}</span>}
         {item.source && <span>{item.source}</span>}
         {item.salaryRange && <span>{item.salaryRange}</span>}
         {daysAgo !== null && <span>{daysAgo}d ago</span>}
