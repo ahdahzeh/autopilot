@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { scrapeForUser } from "@/lib/scrape";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export async function GET(request: Request) {
 
   const { data: users, error } = await supabase
     .from("profiles")
-    .select("*, resume_text")
+    .select("id")
     .eq("onboarded", true);
 
   if (error || !users) {
@@ -20,48 +21,11 @@ export async function GET(request: Request) {
   }
 
   const results = [];
-
   for (const user of users) {
-    const today = new Date().toISOString().split("T")[0];
-    const { count } = await supabase
-      .from("jobs")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", user.id)
-      .eq("date_found", today);
-
-    const remaining = user.daily_job_limit - (count || 0);
-    if (remaining <= 0) {
-      results.push({ user_id: user.id, skipped: true, reason: "daily limit reached" });
-      continue;
-    }
-
-    if (process.env.RAILWAY_SCRAPER_URL) {
-      try {
-        const res = await fetch(`${process.env.RAILWAY_SCRAPER_URL}/scrape`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: user.id,
-            target_titles: user.target_titles,
-            target_locations: user.target_locations,
-            salary_floor: user.salary_floor,
-            excluded_companies: user.excluded_companies,
-            sources: user.sources,
-            daily_job_limit: remaining,
-            resume_text: user.resume_text || "",
-          }),
-        });
-        const data = await res.json();
-        results.push({ user_id: user.id, ...data });
-      } catch (err) {
-        results.push({ user_id: user.id, error: String(err) });
-      }
-    } else {
-      results.push({ user_id: user.id, skipped: true, reason: "no scraper URL configured" });
-    }
+    results.push(await scrapeForUser(user.id));
   }
 
-  // Gmail sync — runs in parallel after scraping
+  // Gmail sync — runs after scraping
   try {
     await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/gmail/sync`, {
       method: "POST",

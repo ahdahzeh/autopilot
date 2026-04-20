@@ -1,10 +1,16 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const publicPaths = ["/login", "/signup", "/api/cron"];
+const publicPaths = ["/login", "/signup", "/api/cron", "/api/subscribe"];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Root path renders a marketing landing for anonymous users and the
+  // dashboard for authed users; page.tsx handles the split server-side.
+  if (pathname === "/") {
+    return NextResponse.next();
+  }
 
   // Allow public paths
   if (publicPaths.some((p) => pathname.startsWith(p))) {

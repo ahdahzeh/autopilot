@@ -61,11 +61,26 @@ export async function GET(request: NextRequest) {
   }, { onConflict: "user_id" });
 
   // Mark gmail_connected on profile
-  await supabase.from("profiles")
+  const { data: profile } = await supabase
+    .from("profiles")
     .update({ gmail_connected: true })
-    .eq("id", userId);
+    .eq("id", userId)
+    .select("onboarded, target_titles")
+    .single();
 
-  // Redirect back to wherever the user came from
-  const redirectPath = origin === "onboarding" ? "/onboarding?gmail=connected" : "/settings?gmail=connected";
+  // If the user is already onboarded (or has titles filled in), skip the
+  // onboarding page entirely — sending them back there with an empty form
+  // was the root cause of the data-wipe bug where onboarding form state
+  // hadn't loaded yet and handleComplete wrote empty arrays to the DB.
+  const alreadySetUp =
+    profile?.onboarded ||
+    (Array.isArray(profile?.target_titles) && profile.target_titles.length > 0);
+
+  const redirectPath = alreadySetUp
+    ? "/settings?gmail=connected"
+    : origin === "onboarding"
+    ? "/onboarding?gmail=connected"
+    : "/settings?gmail=connected";
+
   return Response.redirect(new URL(redirectPath, request.url));
 }

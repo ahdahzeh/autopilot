@@ -9,6 +9,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [inviteCode, setInviteCode] = useState("");
+  const [showInviteField, setShowInviteField] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
@@ -49,6 +50,13 @@ export default function SignupPage() {
       setLoading(false);
       return;
     }
+
+    // Add to Resend audience. Non-blocking — signup never fails on subscribe error.
+    fetch("/api/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, name }),
+    }).catch(() => {});
 
     // Claim invite code if used
     if (inviteCode && data.user) {
@@ -116,18 +124,29 @@ export default function SignupPage() {
             className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
           />
         </div>
-        <div>
-          <label className="text-[10px] uppercase tracking-widest text-muted font-medium block mb-1.5">
-            Invite Code <span className="normal-case tracking-normal">(optional)</span>
-          </label>
-          <input
-            type="text"
-            value={inviteCode}
-            onChange={(e) => setInviteCode(e.target.value)}
-            placeholder="e.g. ABC123"
-            className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 mono uppercase"
-          />
-        </div>
+        {showInviteField ? (
+          <div>
+            <label className="text-[10px] uppercase tracking-widest text-muted font-medium block mb-1.5">
+              Invite Code
+            </label>
+            <input
+              type="text"
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+              placeholder="e.g. ABC123"
+              autoFocus
+              className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 mono uppercase"
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowInviteField(true)}
+            className="text-[10px] text-muted hover:text-foreground transition self-start"
+          >
+            Have an invite code?
+          </button>
+        )}
         {error && <p className="text-xs text-accent-red">{error}</p>}
         <button
           type="submit"

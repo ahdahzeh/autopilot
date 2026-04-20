@@ -3,9 +3,9 @@
 import { useState } from "react";
 import type { ActionItem } from "@/lib/analytics";
 import { DismissButton } from "./dismiss-menu";
+import { JobDetailModal } from "./job-detail-modal";
 import { differenceInDays, parseISO } from "date-fns";
-
-type DismissReason = "expired" | "scam" | "not_interested" | "applied_elsewhere";
+import type { DismissReason } from "@/lib/types";
 
 export function ActionFeed({
   topPicks,
@@ -99,6 +99,38 @@ function ActionCard({
   index: number;
   onDismiss: (jobId: string, reason: DismissReason) => void;
 }) {
+  const [draftState, setDraftState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [draftUrl, setDraftUrl] = useState("");
+  const [draftError, setDraftError] = useState("");
+  const [showDetail, setShowDetail] = useState(false);
+
+  async function createDraft() {
+    setDraftState("loading");
+    setDraftError("");
+    try {
+      const res = await fetch("/api/gmail/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company: item.company || item.name,
+          role: item.role,
+          dateApplied: item.dateApplied,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDraftError(data.error || "Failed to create draft");
+        setDraftState("error");
+      } else {
+        setDraftUrl(data.draftUrl);
+        setDraftState("done");
+      }
+    } catch {
+      setDraftError("Request failed. Try again.");
+      setDraftState("error");
+    }
+  }
+
   const now = new Date();
   const daysAgo = item.dateApplied
     ? differenceInDays(now, parseISO(item.dateApplied))
@@ -116,7 +148,11 @@ function ActionCard({
       : undefined;
 
   return (
-    <div className={`border border-border rounded-xl bg-card px-4 py-3 card-hover animate-fade-up stagger-${Math.min(index + 1, 5)}`}>
+    <>
+    <div
+      onClick={() => setShowDetail(true)}
+      className={`border border-border rounded-xl bg-card px-4 py-3 card-hover animate-fade-up stagger-${Math.min(index + 1, 5)} cursor-pointer`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -129,7 +165,7 @@ function ActionCard({
           </div>
           <p className="text-[10px] text-muted truncate mt-0.5">{item.role}</p>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
           {item.actionType === "apply" && item.applyLink && (
             <a
               href={item.applyLink}
@@ -141,9 +177,24 @@ function ActionCard({
             </a>
           )}
           {item.actionType === "follow_up" && (
-            <span className="bg-blue-50 text-blue-600 px-2.5 py-0.5 rounded text-[10px] font-semibold">
-              Follow Up
-            </span>
+            draftState === "done" ? (
+              <a
+                href={draftUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-green-50 text-green-700 px-2.5 py-0.5 rounded text-[10px] font-semibold hover:brightness-95 transition"
+              >
+                Open Draft ↗
+              </a>
+            ) : (
+              <button
+                onClick={createDraft}
+                disabled={draftState === "loading"}
+                className="bg-blue-50 text-blue-600 px-2.5 py-0.5 rounded text-[10px] font-semibold hover:bg-blue-100 transition disabled:opacity-50"
+              >
+                {draftState === "loading" ? "Creating..." : draftState === "error" ? "Retry" : "Follow Up"}
+              </button>
+            )
           )}
           {item.actionType === "review" && item.applyLink && (
             <a
@@ -164,6 +215,11 @@ function ActionCard({
         {item.salaryRange && <span>{item.salaryRange}</span>}
         {daysAgo !== null && <span>{daysAgo}d ago</span>}
       </div>
+      {draftError && (
+        <p className="text-[9px] text-red-500 mt-1">{draftError}</p>
+      )}
     </div>
+    {showDetail && <JobDetailModal job={item} onClose={() => setShowDetail(false)} />}
+    </>
   );
 }

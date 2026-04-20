@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-
-type DismissReason = "expired" | "scam" | "not_interested" | "applied_elsewhere";
+import type { DismissReason } from "@/lib/types";
 
 const REASONS: { value: DismissReason; label: string }[] = [
   { value: "not_interested", label: "Not Interested" },

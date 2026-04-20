@@ -15,15 +15,14 @@ export function mapRow(row: Record<string, unknown>): Job {
     outcome: (row.outcome as string) || "",
     priority: (row.priority as string) || "",
     matchScore: (row.match_score as number) ?? null,
+    tailorScore: (row.tailor_score as number) ?? null,
+    tailorReasoning: (row.tailor_reasoning as string) || "",
     salaryRange: (row.salary_range as string) || "",
-    salaryFloorMet: true,
-    foundingRole: (row.founding_role as boolean) || false,
-    resumeVariant: "",
-    coverLetterRating: "",
     dateFound: (row.date_found as string) ?? null,
     dateApplied: (row.date_applied as string) ?? null,
     responseDate: (row.response_date as string) ?? null,
     applyLink: (row.apply_link as string) || "",
     daysSinceApplied: null,
+    description: (row.description as string) || "",
   };
 }

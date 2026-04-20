@@ -4,14 +4,29 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { ResumeUpload } from "@/components/resume-upload";
+import { TONES, MODELS, type Tone, type ModelChoice } from "@/lib/tailor-prompts";
 
 const SOURCES = [
   { id: "linkedin", label: "LinkedIn" },
   { id: "builtin", label: "BuiltIn" },
   { id: "hiringcafe", label: "Hiring Cafe" },
+  { id: "greenhouse", label: "Greenhouse (ATS)" },
+  { id: "lever", label: "Lever (ATS)" },
+  { id: "ashby", label: "Ashby (ATS)" },
   { id: "bandana", label: "Bandana" },
   { id: "welcometothejungle", label: "Welcome to the Jungle" },
 ];
+
+const ATS_SOURCE_IDS = new Set(["greenhouse", "lever", "ashby"]);
+
+type TrackedCompany = {
+  id: string;
+  ats_type: "greenhouse" | "lever" | "ashby";
+  slug: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+};
 
 const DAILY_LIMITS = [10, 20, 30];
 
@@ -31,6 +46,18 @@ export default function SettingsPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [gmailConnected, setGmailConnected] = useState(false);
   const [resumeLength, setResumeLength] = useState(0);
+  const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [savingApiKey, setSavingApiKey] = useState(false);
+  const [savedApiKey, setSavedApiKey] = useState(false);
+  const [tailoringTone, setTailoringTone] = useState<Tone>("professional");
+  const [tailoringModel, setTailoringModel] = useState<ModelChoice>("sonnet");
+  const [savingTailorPrefs, setSavingTailorPrefs] = useState(false);
+  const [savedTailorPrefs, setSavedTailorPrefs] = useState(false);
+  const [tailorUsedToday, setTailorUsedToday] = useState(0);
+  const TAILOR_DAILY_LIMIT = 40;
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState("");
+  const [scrapeStarting, setScrapeStarting] = useState(false);
 
   // Profile fields
   const [displayName, setDisplayName] = useState("");
@@ -40,12 +67,21 @@ export default function SettingsPage() {
   const [sources, setSources] = useState<string[]>([]);
   const [dailyLimit, setDailyLimit] = useState(20);
   const [excludedCompanies, setExcludedCompanies] = useState("");
+  const [excludedTitles, setExcludedTitles] = useState("");
+  const [minMatchScore, setMinMatchScore] = useState(0);
 
   // Invite codes
   const [inviteCodes, setInviteCodes] = useState<InviteCode[]>([]);
   const [newInviteTitles, setNewInviteTitles] = useState("");
   const [newInviteLocations, setNewInviteLocations] = useState("");
   const [creatingInvite, setCreatingInvite] = useState(false);
+
+  // Tracked companies (Greenhouse / Lever / Ashby)
+  const [companies, setCompanies] = useState<TrackedCompany[]>([]);
+  const [newCompanyUrl, setNewCompanyUrl] = useState("");
+  const [newCompanyName, setNewCompanyName] = useState("");
+  const [addingCompany, setAddingCompany] = useState(false);
+  const [companyError, setCompanyError] = useState("");
 
   const router = useRouter();
   const supabase = createClient();
@@ -78,9 +114,14 @@ export default function SettingsPage() {
         setSources(profile.sources || []);
         setDailyLimit(profile.daily_job_limit || 20);
         setExcludedCompanies(profile.excluded_companies?.join(", ") || "");
+        setExcludedTitles(profile.excluded_titles?.join(", ") || "");
+        setMinMatchScore(profile.min_match_score ?? 0);
         setIsAdmin(profile.is_admin || false);
         setGmailConnected(profile.gmail_connected || false);
         setResumeLength(profile.resume_text?.length || 0);
+        setAnthropicApiKey(profile.anthropic_api_key || "");
+        setTailoringTone((profile.tailoring_tone as Tone) || "professional");
+        setTailoringModel((profile.tailoring_model as ModelChoice) || "sonnet");
       }
 
       if (profile?.is_admin) {
@@ -92,10 +133,66 @@ export default function SettingsPage() {
         setInviteCodes(codes || []);
       }
 
+      const day = new Date().toISOString().slice(0, 10);
+      const { data: usage } = await supabase
+        .from("tailor_usage")
+        .select("count")
+        .eq("user_id", user.id)
+        .eq("day", day)
+        .maybeSingle();
+      setTailorUsedToday((usage?.count as number | undefined) ?? 0);
+
+      try {
+        const res = await fetch("/api/companies");
+        if (res.ok) {
+          const { companies: rows } = (await res.json()) as { companies: TrackedCompany[] };
+          setCompanies(rows ?? []);
+        }
+      } catch {
+        // Non-fatal — tracked companies is additive to the existing flow.
+      }
+
       setLoading(false);
     }
     load();
   }, [supabase]);
+
+  async function addCompany() {
+    setAddingCompany(true);
+    setCompanyError("");
+    try {
+      const res = await fetch("/api/companies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: newCompanyUrl.trim(), name: newCompanyName.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCompanyError(data.error || "Could not add company");
+        return;
+      }
+      setCompanies((prev) => {
+        const without = prev.filter((c) => c.id !== data.company.id);
+        return [data.company, ...without];
+      });
+      setNewCompanyUrl("");
+      setNewCompanyName("");
+    } finally {
+      setAddingCompany(false);
+    }
+  }
+
+  async function removeCompany(id: string) {
+    const prev = companies;
+    setCompanies((cs) => cs.filter((c) => c.id !== id));
+    const res = await fetch(`/api/companies?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) {
+      // Restore on failure so the user sees the real state.
+      setCompanies(prev);
+      const data = await res.json().catch(() => ({}));
+      setCompanyError(data.error || "Could not remove company");
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -112,12 +209,61 @@ export default function SettingsPage() {
         sources,
         daily_job_limit: dailyLimit,
         excluded_companies: excludedCompanies.split(",").map((c) => c.trim()).filter(Boolean),
+        excluded_titles: excludedTitles.split(",").map((t) => t.trim()).filter(Boolean),
+        min_match_score: Math.max(0, Math.min(10, minMatchScore)),
       })
       .eq("id", user.id);
 
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  }
+
+  async function saveApiKey() {
+    setSavingApiKey(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      await supabase.from("profiles").update({ anthropic_api_key: anthropicApiKey.trim() }).eq("id", user.id);
+      setSavedApiKey(true);
+      setTimeout(() => setSavedApiKey(false), 2000);
+    } finally {
+      setSavingApiKey(false);
+    }
+  }
+
+  async function saveTailorPrefs() {
+    setSavingTailorPrefs(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      await supabase
+        .from("profiles")
+        .update({ tailoring_tone: tailoringTone, tailoring_model: tailoringModel })
+        .eq("id", user.id);
+      setSavedTailorPrefs(true);
+      setTimeout(() => setSavedTailorPrefs(false), 2000);
+    } finally {
+      setSavingTailorPrefs(false);
+    }
+  }
+
+  async function syncGmail() {
+    setSyncing(true);
+    setSyncResult("");
+    try {
+      const res = await fetch("/api/gmail/sync");
+      const data = await res.json();
+      if (data.error) {
+        setSyncResult("Sync failed: " + data.error);
+      } else {
+        setSyncResult(`Done. ${data.updated ?? 0} job(s) updated from ${data.emails_scanned ?? 0} emails.`);
+      }
+    } catch {
+      setSyncResult("Sync failed. Try again.");
+    } finally {
+      setSyncing(false);
+    }
   }
 
   function toggleSource(id: string) {
@@ -172,17 +318,22 @@ export default function SettingsPage() {
       <div className="max-w-2xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">
-              Auto<span className="text-accent-purple">pilot</span>
-            </h1>
-            <p className="text-[10px] text-muted mono uppercase tracking-widest mt-1">Settings</p>
+          <div className="cb-brand">
+            <div className="hdr-mark">
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <circle cx="12" cy="12" r="9" />
+                <circle cx="12" cy="12" r="4" />
+                <line x1="12" y1="3" x2="12" y2="8" />
+                <line x1="12" y1="16" x2="12" y2="21" />
+              </svg>
+            </div>
+            <div>
+              <div className="cb-brand__name">Autopilot</div>
+              <div className="cb-brand__sub">Settings</div>
+            </div>
           </div>
-          <button
-            onClick={() => router.push("/")}
-            className="px-4 py-2 text-xs border border-border rounded-lg hover:bg-card transition-colors"
-          >
-            Back to Dashboard
+          <button onClick={() => router.push("/")} className="cb-btn">
+            ← Back
           </button>
         </div>
 
@@ -239,6 +390,37 @@ export default function SettingsPage() {
               className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
             />
           </Field>
+
+          <Field
+            label="Excluded Title Keywords"
+            hint="Substring match, comma-separated. e.g. graphic, brand, junior"
+          >
+            <textarea
+              value={excludedTitles}
+              onChange={(e) => setExcludedTitles(e.target.value)}
+              rows={2}
+              placeholder="graphic, brand, web designer, junior"
+              className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
+            />
+          </Field>
+
+          <Field
+            label="Minimum Match Score"
+            hint="0–10 against your resume. Jobs below this are not added. 0 disables."
+          >
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={0}
+                max={10}
+                step={1}
+                value={minMatchScore}
+                onChange={(e) => setMinMatchScore(Number(e.target.value))}
+                className="flex-1"
+              />
+              <span className="mono text-sm w-8 text-right">{minMatchScore}</span>
+            </div>
+          </Field>
         </Section>
 
         {/* Sources */}
@@ -259,6 +441,78 @@ export default function SettingsPage() {
               </button>
             ))}
           </div>
+          {sources.some((s) => ATS_SOURCE_IDS.has(s)) && companies.length === 0 && (
+            <p className="text-[10px] text-muted mt-2">
+              ATS sources need at least one company in Tracked Companies below to return jobs.
+            </p>
+          )}
+        </Section>
+
+        {/* Tracked Companies (ATS) */}
+        <Section title="Tracked Companies">
+          <div className="bg-card border border-border rounded-xl p-4 space-y-3 mb-3">
+            <p className="text-[10px] text-muted">
+              Paste a company&apos;s Greenhouse, Lever, or Ashby board URL. We&apos;ll pull every open role directly from their ATS each morning.
+            </p>
+            <Field label="Board URL" hint="jobs.lever.co/... · boards.greenhouse.io/... · jobs.ashbyhq.com/...">
+              <input
+                type="text"
+                value={newCompanyUrl}
+                onChange={(e) => setNewCompanyUrl(e.target.value)}
+                placeholder="https://jobs.lever.co/notion"
+                className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
+              />
+            </Field>
+            <Field label="Display Name" hint="Optional. Defaults to the URL slug.">
+              <input
+                type="text"
+                value={newCompanyName}
+                onChange={(e) => setNewCompanyName(e.target.value)}
+                placeholder="Notion"
+                className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
+              />
+            </Field>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={addCompany}
+                disabled={addingCompany || !newCompanyUrl.trim()}
+                className="cb-btn cb-btn--solid"
+              >
+                {addingCompany ? "Adding" : "Add company"}
+              </button>
+              {companyError && (
+                <span className="mono text-[10px] uppercase tracking-widest" style={{ color: "var(--danger)" }}>
+                  {companyError}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {companies.length > 0 ? (
+            <div className="space-y-2">
+              {companies.map((c) => (
+                <div
+                  key={c.id}
+                  className="flex items-center justify-between gap-2 px-4 py-3 border border-border rounded-xl bg-card"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate">{c.name || c.slug}</p>
+                    <p className="text-[9px] mono text-muted uppercase tracking-widest">
+                      {c.ats_type} · {c.slug}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => removeCompany(c.id)}
+                    className="text-[10px] mono uppercase tracking-widest text-muted hover:text-accent-red transition-colors"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[10px] text-muted">No companies tracked yet. Globally curated companies still run in the background.</p>
+          )}
         </Section>
 
         {/* Daily Limit */}
@@ -283,14 +537,10 @@ export default function SettingsPage() {
 
         {/* Save */}
         <div className="flex items-center gap-3 mb-10">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="px-6 py-2.5 text-sm font-semibold rounded-lg bg-accent-purple text-white hover:opacity-90 transition disabled:opacity-50"
-          >
-            {saving ? "Saving..." : "Save Changes"}
+          <button onClick={handleSave} disabled={saving} className="cb-btn cb-btn--solid">
+            {saving ? "Saving" : "Save changes"}
           </button>
-          {saved && <span className="text-xs text-accent-green font-medium">Saved</span>}
+          {saved && <span className="mono text-[10px] uppercase tracking-widest" style={{ color: "var(--success)" }}>Saved</span>}
         </div>
 
         {/* Invite Codes (admin only) */}
@@ -318,12 +568,8 @@ export default function SettingsPage() {
                   className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
                 />
               </Field>
-              <button
-                onClick={createInviteCode}
-                disabled={creatingInvite}
-                className="px-4 py-2 text-xs font-semibold rounded-lg bg-foreground text-white hover:opacity-90 transition disabled:opacity-50"
-              >
-                {creatingInvite ? "Creating..." : "Generate Invite Code"}
+              <button onClick={createInviteCode} disabled={creatingInvite} className="cb-btn cb-btn--solid">
+                {creatingInvite ? "Creating" : "Generate code"}
               </button>
             </div>
 
@@ -358,6 +604,44 @@ export default function SettingsPage() {
           </Section>
         )}
 
+        {/* Schedule */}
+        <Section title="Update Schedule">
+          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+            <div className="flex items-start gap-3">
+              <span className="text-xl">🕗</span>
+              <div className="flex-1">
+                <p className="text-sm font-semibold">Daily at 13:00 UTC (9 AM ET / 6 AM PT)</p>
+                <p className="text-[10px] text-muted mt-1">
+                  Fresh jobs are scraped automatically every morning. You can also trigger a scrape manually below. Results will appear on your dashboard in 1 to 2 minutes.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={scrapeStarting}
+              onClick={async () => {
+                setScrapeStarting(true);
+                try {
+                  const res = await fetch("/api/jobs/scrape", { method: "POST" });
+                  if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    alert(`Could not start scrape: ${data.error || res.statusText}`);
+                    setScrapeStarting(false);
+                    return;
+                  }
+                  router.push("/?welcome=1");
+                } catch (err) {
+                  alert(`Could not start scrape: ${String(err)}`);
+                  setScrapeStarting(false);
+                }
+              }}
+              className="cb-btn cb-btn--solid"
+            >
+              {scrapeStarting ? "Starting" : "Run scrape now"}
+            </button>
+          </div>
+        </Section>
+
         {/* Resume */}
         <Section title="Resume">
           <p className="text-[10px] text-muted mb-3">
@@ -372,15 +656,30 @@ export default function SettingsPage() {
         {/* Gmail */}
         <Section title="Gmail Sync">
           {gmailConnected ? (
-            <div className="flex items-center justify-between px-4 py-3 border border-border rounded-xl bg-card">
-              <div className="flex items-center gap-3">
-                <span className="text-xl">📬</span>
-                <div>
-                  <p className="text-sm font-semibold">Gmail Connected</p>
-                  <p className="text-[10px] text-muted">Pipeline updates automatically from your inbox</p>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between px-4 py-3 border border-border rounded-xl bg-card">
+                <div className="flex items-center gap-3">
+                  <span className="text-xl">📬</span>
+                  <div>
+                    <p className="text-sm font-semibold">Gmail Connected</p>
+                    <p className="text-[10px] text-muted">Pipeline updates automatically from your inbox</p>
+                  </div>
                 </div>
+                <span className="text-[10px] text-accent-green font-medium mono">Active</span>
               </div>
-              <span className="text-[10px] text-accent-green font-medium mono">Active</span>
+              <div className="flex items-center gap-3">
+                <button onClick={syncGmail} disabled={syncing} className="cb-btn cb-btn--solid">
+                  {syncing ? "Syncing" : "Sync now"}
+                </button>
+                {syncResult && (
+                  <span
+                    className="mono text-[10px] uppercase tracking-widest"
+                    style={{ color: syncResult.startsWith("Sync failed") ? "var(--danger)" : "var(--success)" }}
+                  >
+                    {syncResult}
+                  </span>
+                )}
+              </div>
             </div>
           ) : (
             <div className="space-y-2">
@@ -401,6 +700,121 @@ export default function SettingsPage() {
           )}
         </Section>
 
+        {/* AI Tailoring */}
+        <Section title="AI Tailoring">
+          {(() => {
+            const remaining = Math.max(0, TAILOR_DAILY_LIMIT - tailorUsedToday);
+            const pct = Math.min(100, Math.round((tailorUsedToday / TAILOR_DAILY_LIMIT) * 100));
+            const hasOwnKey = anthropicApiKey.trim().length > 0;
+            const tone =
+              hasOwnKey ? "ok" :
+              remaining === 0 ? "danger" :
+              remaining <= 5 ? "warn" : "ok";
+            return (
+              <div className="bg-card border border-border rounded-xl p-4 mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold">Daily tailoring usage</p>
+                  <p className="mono text-[11px] text-muted">
+                    {tailorUsedToday} / {TAILOR_DAILY_LIMIT}
+                  </p>
+                </div>
+                <div className="h-1.5 w-full bg-border/50 rounded-full overflow-hidden">
+                  <div
+                    className="h-full transition-all"
+                    style={{
+                      width: `${hasOwnKey ? 0 : pct}%`,
+                      background:
+                        tone === "danger" ? "var(--accent-red)" :
+                        tone === "warn" ? "var(--accent)" :
+                        "var(--accent-purple)",
+                    }}
+                  />
+                </div>
+                <p className="text-[10px] text-muted mt-2">
+                  {hasOwnKey
+                    ? "Using your own Anthropic key. No daily cap applies."
+                    : remaining === 0
+                      ? "Daily cap reached. Resets at midnight UTC, or add your own key below."
+                      : `${remaining} tailoring runs left today. Resets at midnight UTC.`}
+                </p>
+              </div>
+            );
+          })()}
+
+          <Field label="Writing Tone" hint="Applied to bullets, cover letters, and prep">
+            <div className="grid grid-cols-2 gap-2">
+              {(Object.keys(TONES) as Tone[]).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTailoringTone(t)}
+                  className={`text-left px-3 py-2 text-xs rounded-lg border transition-all ${
+                    tailoringTone === t
+                      ? "border-accent-purple bg-accent-purple/5 text-foreground"
+                      : "border-border hover:bg-card text-muted"
+                  }`}
+                >
+                  <p className="font-semibold">{TONES[t].label}</p>
+                  <p className="text-[9px] text-muted mt-0.5">{TONES[t].description}</p>
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          <Field label="Model" hint="Trade speed for depth">
+            <div className="grid grid-cols-2 gap-2">
+              {(Object.keys(MODELS) as ModelChoice[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setTailoringModel(m)}
+                  className={`text-left px-3 py-2 text-xs rounded-lg border transition-all ${
+                    tailoringModel === m
+                      ? "border-accent-purple bg-accent-purple/5 text-foreground"
+                      : "border-border hover:bg-card text-muted"
+                  }`}
+                >
+                  <p className="font-semibold">{MODELS[m].label}</p>
+                  <p className="text-[9px] text-muted mt-0.5">{MODELS[m].description}</p>
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          <div className="flex items-center gap-3 mt-2 mb-5">
+            <button onClick={saveTailorPrefs} disabled={savingTailorPrefs} className="cb-btn cb-btn--solid">
+              {savingTailorPrefs ? "Saving" : "Save preferences"}
+            </button>
+            {savedTailorPrefs && <span className="mono text-[10px] uppercase tracking-widest" style={{ color: "var(--success)" }}>Saved</span>}
+          </div>
+
+          <p className="text-[10px] text-muted mb-3">
+            Optionally add your own Anthropic API key to bill tailoring usage to your own account instead of the shared pool.
+          </p>
+          <Field label="Anthropic API Key">
+            <input
+              type="password"
+              value={anthropicApiKey}
+              onChange={(e) => setAnthropicApiKey(e.target.value)}
+              placeholder="sk-ant-..."
+              className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white font-mono focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
+            />
+          </Field>
+          <div className="flex items-center gap-3 mt-2">
+            <button onClick={saveApiKey} disabled={savingApiKey} className="cb-btn cb-btn--solid">
+              {savingApiKey ? "Saving" : "Save key"}
+            </button>
+            {savedApiKey && <span className="mono text-[10px] uppercase tracking-widest" style={{ color: "var(--success)" }}>Saved</span>}
+          </div>
+
+          <a
+            href="/stories"
+            className="inline-block mt-5 text-xs text-accent-purple hover:opacity-70"
+          >
+            View your story bank →
+          </a>
+        </Section>
+
         {/* Account */}
         <Section title="Account">
           <button
@@ -408,9 +822,9 @@ export default function SettingsPage() {
               await supabase.auth.signOut();
               window.location.href = "/login";
             }}
-            className="px-4 py-2 text-xs text-accent-red border border-accent-red/30 rounded-lg hover:bg-accent-red/5 transition"
+            className="cb-btn cb-btn--danger"
           >
-            Sign Out
+            Sign out
           </button>
         </Section>
       </div>

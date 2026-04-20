@@ -1,4 +1,4 @@
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +34,26 @@ function classifyEmail(subject: string, snippet: string): JobStatus | null {
     if (patterns.some((p) => p.test(text))) return status as JobStatus;
   }
   return null;
+}
+
+function normalizeCompany(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\b(inc|llc|ltd|corp|corporation|co|company|the)\b\.?/g, "")
+    .replace(/[^a-z0-9 ]/g, "")
+    .trim();
+}
+
+function extractDomain(fromHeader: string): string | null {
+  const match = fromHeader.match(/<([^>]+)>/) || fromHeader.match(/([^\s]+@[^\s]+)/);
+  const addr = match?.[1] ?? match?.[0];
+  if (!addr || !addr.includes("@")) return null;
+  const domain = addr.split("@")[1]?.toLowerCase() ?? "";
+  return domain.replace(/^(mail\.|e\.|email\.|info\.|no-?reply\.|notifications?\.|hi\.|hello\.)/, "");
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function getValidAccessToken(supabase: ReturnType<typeof createServiceClient>, userId: string) {
@@ -120,11 +140,18 @@ async function syncUserGmail(supabase: ReturnType<typeof createServiceClient>, u
     const newStatus = classifyEmail(subject, snippet);
     if (!newStatus) continue;
 
-    // Match email to a job by company name appearing in subject/from/snippet
+    // Match email to a job by company. Short/common names ("Hinge", "Meta",
+    // "Ivy") caused false positives via loose substring matching, so we now
+    // require either a domain match on the From header or a whole-word match
+    // on the subject/snippet.
     const matchedJob = jobs.find((job) => {
-      const company = job.company.toLowerCase();
-      const emailText = `${subject} ${from} ${snippet}`.toLowerCase();
-      return company.length > 2 && emailText.includes(company);
+      const company = normalizeCompany(job.company);
+      if (company.length < 4) return false;
+      const fromDomain = extractDomain(from);
+      if (fromDomain && fromDomain.includes(company)) return true;
+      const haystack = `${subject} ${snippet}`.toLowerCase();
+      const wordBoundary = new RegExp(`\\b${escapeRegex(company)}\\b`, "i");
+      return wordBoundary.test(haystack);
     });
 
     if (!matchedJob) continue;
@@ -175,11 +202,11 @@ export async function POST(request: NextRequest) {
 
 // Allow a single user to trigger their own sync
 export async function GET() {
-  const supabase = await createServiceClient();
-  const { data: { user } } = await (await import("@/lib/supabase/server")).createClient().then(c => c.auth.getUser().then(r => ({ data: r.data })));
-
+  const auth = await createClient();
+  const { data: { user } } = await auth.auth.getUser();
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-  const result = await syncUserGmail(supabase, user.id);
+  const svc = createServiceClient();
+  const result = await syncUserGmail(svc, user.id);
   return Response.json(result);
 }

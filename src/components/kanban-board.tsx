@@ -2,10 +2,9 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { Job } from "@/lib/types";
+import type { Job, DismissReason } from "@/lib/types";
 import { DismissButton } from "./dismiss-menu";
-
-type DismissReason = "expired" | "scam" | "not_interested" | "applied_elsewhere";
+import { JobDetailModal } from "./job-detail-modal";
 
 const COLUMNS = ["New", "Reviewing", "Applied", "Interview", "Offer"] as const;
 
@@ -37,45 +36,56 @@ export function KanbanBoard({
   jobs: Job[];
   onDismiss: (jobId: string, reason: DismissReason) => void;
 }) {
+  const [detailJob, setDetailJob] = useState<Job | null>(null);
   const columns = COLUMNS.map((status) => ({
     status,
     jobs: jobs.filter((j) => j.status === status),
   }));
 
   return (
-    <div className="flex gap-3 md:gap-4 pb-4 overflow-x-auto" style={{ minHeight: "70vh" }}>
-      {columns.map((col) => (
-        <div key={col.status} className="flex-1 min-w-[200px] sm:min-w-0">
-          <div className="flex items-center gap-2 mb-3 px-1">
-            <div
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: COLUMN_COLORS[col.status] }}
-            />
-            <h3 className="text-xs font-semibold">{col.status}</h3>
-            <span className="mono text-[10px] text-muted">{col.jobs.length}</span>
+    <>
+      <div className="flex gap-3 md:gap-4 pb-4 overflow-x-auto" style={{ minHeight: "70vh" }}>
+        {columns.map((col) => (
+          <div key={col.status} className="flex-1 min-w-[200px] sm:min-w-0">
+            <div className="flex items-center gap-2 mb-3 px-1">
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: COLUMN_COLORS[col.status] }}
+              />
+              <h3 className="text-xs font-semibold">{col.status}</h3>
+              <span className="mono text-[10px] text-muted">{col.jobs.length}</span>
+            </div>
+            <div className="space-y-2">
+              {col.jobs.map((job) => (
+                <KanbanCard
+                  key={job.id}
+                  job={job}
+                  onDismiss={onDismiss}
+                  onOpen={() => setDetailJob(job)}
+                />
+              ))}
+              {col.jobs.length === 0 && (
+                <div className="border border-dashed border-border rounded-lg p-6 text-center">
+                  <p className="text-[10px] text-muted">No jobs</p>
+                </div>
+              )}
+            </div>
           </div>
-          <div className="space-y-2">
-            {col.jobs.map((job) => (
-              <KanbanCard key={job.id} job={job} onDismiss={onDismiss} />
-            ))}
-            {col.jobs.length === 0 && (
-              <div className="border border-dashed border-border rounded-lg p-6 text-center">
-                <p className="text-[10px] text-muted">No jobs</p>
-              </div>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+      {detailJob && <JobDetailModal job={detailJob} onClose={() => setDetailJob(null)} />}
+    </>
   );
 }
 
 function KanbanCard({
   job,
   onDismiss,
+  onOpen,
 }: {
   job: Job;
   onDismiss: (jobId: string, reason: DismissReason) => void;
+  onOpen: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const initial = (job.company || job.name || "?")[0].toUpperCase();
@@ -177,6 +187,15 @@ function KanbanCard({
                   View Listing ↗
                 </a>
               )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpen();
+                }}
+                className="block text-[9px] text-accent-purple hover:underline mono mt-1"
+              >
+                Tailor & Details →
+              </button>
             </div>
           </motion.div>
         )}

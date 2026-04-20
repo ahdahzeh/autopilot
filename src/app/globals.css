@@ -1,14 +1,78 @@
 @import "tailwindcss";
 
+/* ── Cerebral design tokens ─────────────────────────────
+   Ported from cerebral.ahdahzeh.com so Autopilot and Cerebral share
+   a visual language. Light is default; html.dark flips the palette.
+   Legacy Tailwind class names (accent-purple, accent-green, accent-red,
+   background, foreground, card, muted, border) all stay mapped so
+   existing components keep rendering without edits.
+*/
+
 :root {
-  --background: #f5f4f0;
-  --foreground: #1a1a1a;
-  --accent-green: #1D9E75;
-  --accent-purple: #534AB7;
-  --accent-red: #D85A30;
-  --border: #e5e5e0;
-  --muted: #888880;
-  --card: #ffffff;
+  /* Surfaces */
+  --bg: #ffffff;
+  --bg2: #fafafa;
+  --bg3: #f5f5f5;
+
+  /* Borders */
+  --border: #eaeaea;
+  --border2: rgba(0, 0, 0, 0.15);
+
+  /* Text */
+  --tx: #000000;
+  --tx2: #444444;
+  --tx3: #888888;
+  --tx4: #bbbbbb;
+
+  /* Accents */
+  --accent: #f5a623;            /* gold */
+  --accent-light: #fff5e1;
+  --accent-dark: #a35d00;
+  --blue: #1f51ff;              /* primary action (Vercel electric) */
+  --blue-light: #e8edff;
+  --blue-dark: #0a2eb5;
+  --green: #00cc55;
+  --green-light: #e6faf0;
+  --orange: #d97757;
+  --orange-light: #fef0e6;
+
+  /* Semantic */
+  --success: #00a67e;
+  --warn: #f5a623;
+  --danger: #e00000;
+
+  /* Radii & shadow */
+  --r: 6px;
+  --rl: 8px;
+  --rxl: 12px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+
+  /* Legacy aliases the existing codebase expects. Map them onto
+     cerebral tokens so no component has to change. */
+  --background: var(--bg);
+  --foreground: var(--tx);
+  --card: var(--bg2);
+  --muted: var(--tx3);
+  --accent-purple: var(--blue);       /* "purple" classname points at Vercel blue now */
+  --accent-green: var(--success);
+  --accent-red: var(--danger);
+}
+
+html.dark {
+  --bg: #0a0a0a;
+  --bg2: #111111;
+  --bg3: #1a1a1a;
+  --border: #222222;
+  --border2: rgba(255, 255, 255, 0.12);
+  --tx: #ffffff;
+  --tx2: #aaaaaa;
+  --tx3: #666666;
+  --tx4: #333333;
+  --accent-light: #2a1d05;
+  --blue-light: #0f1a3d;
+  --green-light: #0d2015;
+  --orange-light: #1a0d00;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 @theme inline {
@@ -20,20 +84,48 @@
   --color-border: var(--border);
   --color-muted: var(--muted);
   --color-card: var(--card);
+  --color-bg: var(--bg);
+  --color-bg2: var(--bg2);
+  --color-bg3: var(--bg3);
+  --color-tx: var(--tx);
+  --color-tx2: var(--tx2);
+  --color-tx3: var(--tx3);
+  --color-tx4: var(--tx4);
+  --color-blue: var(--blue);
+  --color-blue-light: var(--blue-light);
+  --color-green: var(--green);
+  --color-green-light: var(--green-light);
+  --color-orange: var(--orange);
+  --color-success: var(--success);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --radius: var(--r);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg);
+  color: var(--tx);
   font-family: var(--font-sans), system-ui, sans-serif;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.2s, color 0.2s;
 }
 
 /* Monospace for all numerical data */
 .mono {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
+}
+
+/* Labels in uppercase mono, cerebral style */
+.label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--tx3);
 }
 
 /* Animations */
@@ -51,6 +143,11 @@ body {
   0% { transform: scale(1); }
   50% { transform: scale(1.12); }
   100% { transform: scale(1); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .animate-fade-up {
@@ -88,5 +185,271 @@ body {
 }
 .card-hover:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+  box-shadow: var(--shadow);
+}
+
+/* Pulse dot for live/streaming state (cerebral hero pill) */
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-light);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+/* ── Cerebral primitives (760px doc-shell vocabulary) ────────────
+   Mirror of the building blocks used on cerebral.ahdahzeh.com and
+   de.ahdahzeh.com so Autopilot's marketing surfaces share the same
+   visual grammar. Class names match the cerebral source 1:1 so the
+   two codebases stay legible side by side. */
+
+.shell { max-width: 760px; margin: 0 auto; padding: 48px 40px 96px; }
+@media (max-width: 640px) { .shell { padding: 32px 22px 72px; } }
+
+.shell--wide { max-width: 1100px; padding: 36px 40px 96px; }
+@media (max-width: 640px) { .shell--wide { padding: 28px 22px 64px; } }
+
+.hdr-mark { width: 24px; height: 24px; border-radius: 6px; background: var(--tx);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  transition: background 0.2s; }
+.hdr-mark svg { color: var(--bg); }
+
+.hdr-btn { width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--border); border-radius: var(--r);
+  cursor: pointer; color: var(--tx2); transition: border-color 0.12s, color 0.12s; }
+.hdr-btn:hover { border-color: var(--border2); color: var(--tx); }
+
+.hero-canvas { height: 200px; position: relative; overflow: hidden; background: var(--bg2);
+  border-bottom: 1px solid var(--border); }
+@media (max-width: 640px) { .hero-canvas { height: 160px; } }
+.scan-anim { position: absolute; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: scan-line 3.4s linear infinite; opacity: 0.5; pointer-events: none; }
+@keyframes scan-line { 0% { top: -2px; } 100% { top: 102%; } }
+@keyframes pulse-breathe { 0%, 100% { opacity: 0.4; r: 28; } 50% { opacity: 0.1; r: 75; } }
+@keyframes pulse2 { 0%, 100% { opacity: 0.3; r: 50; } 50% { opacity: 0.08; r: 100; } }
+@keyframes pulse3 { 0%, 100% { opacity: 0.2; r: 72; } 50% { opacity: 0.06; r: 120; } }
+@keyframes float-node { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+.pr1 { animation: pulse-breathe 4s ease-in-out infinite; }
+.pr2 { animation: pulse2 4s ease-in-out infinite; animation-delay: -0.8s; }
+.pr3 { animation: pulse3 4s ease-in-out infinite; animation-delay: -1.6s; }
+.pr4 { animation: pulse-breathe 4s ease-in-out infinite; animation-delay: -2.4s; }
+.pr5 { animation: pulse2 4s ease-in-out infinite; animation-delay: -3.2s; }
+.fn1 { animation: float-node 3s ease-in-out infinite; }
+.fn2 { animation: float-node 3s ease-in-out infinite; animation-delay: -0.5s; }
+.fn3 { animation: float-node 3s ease-in-out infinite; animation-delay: -1s; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px; color: var(--tx3); background: var(--bg3);
+  border: 1px solid var(--border); border-radius: 99px;
+  padding: 5px 11px; letter-spacing: 0.04em; }
+.pill-dot { width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-light);
+  animation: pulse 2.4s ease-in-out infinite; }
+
+.hero-stats { display: flex; gap: 0; border: 1px solid var(--border);
+  border-radius: var(--r); overflow: hidden; width: fit-content; background: var(--bg); }
+.stat { padding: 14px 26px; text-align: left; border-right: 1px solid var(--border); }
+.stat:last-child { border-right: none; }
+@media (max-width: 480px) { .stat { padding: 12px 18px; } }
+.stat-num { font-size: 24px; font-weight: 600; letter-spacing: -0.03em;
+  color: var(--tx); font-family: var(--font-mono), ui-monospace, monospace; }
+.stat-label { font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 9px; color: var(--tx3); letter-spacing: 0.06em;
+  text-transform: uppercase; margin-top: 3px; }
+
+.section-label { font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--tx3); margin-bottom: 14px; display: flex; align-items: center; gap: 10px; }
+.section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+/* Course cards. Apple-Staff sized: dense, equal-height, lead with the
+   title. Icon is a quiet anchor, not a mascot. No right arrow chrome,
+   the whole card is the affordance. */
+.course { display: flex; flex-direction: column;
+  text-decoration: none; color: inherit; height: 100%;
+  border: 1px solid var(--border); border-radius: var(--rl);
+  padding: 18px 18px 16px; background: var(--bg);
+  position: relative; overflow: hidden;
+  transition: border-color 0.15s, transform 0.12s, box-shadow 0.15s; }
+.course:hover { border-color: var(--border2); box-shadow: var(--shadow); }
+.course:active { transform: scale(0.995); }
+.course-stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
+.course.blue .course-stripe { background: var(--blue); }
+.course.green .course-stripe { background: var(--green); }
+.course.orange .course-stripe { background: var(--orange); }
+
+/* Top row: icon | code tag + meta. Title sits below, on its own line. */
+.course-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.course-icon { width: 32px; height: 32px; border-radius: var(--r);
+  background: var(--accent-light); display: flex; align-items: center;
+  justify-content: center; flex-shrink: 0; color: var(--accent); }
+.course.blue .course-icon { background: var(--blue-light); color: var(--blue); }
+.course.green .course-icon { background: var(--green-light); color: var(--green); }
+.course.orange .course-icon { background: var(--orange-light); color: var(--orange); }
+.course-icon svg { width: 16px; height: 16px; }
+
+.course-code { display: flex; align-items: center; gap: 8px; min-width: 0;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px; letter-spacing: 0.04em; color: var(--tx3); }
+.course-code > span:not(.course-code-tag) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.course-code-tag { display: inline-flex; align-items: center;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 9px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; padding: 2px 6px; border-radius: 3px;
+  background: var(--accent-light); color: var(--accent-dark); flex-shrink: 0; }
+.course.blue .course-code-tag { background: var(--blue-light); color: var(--blue-dark); }
+.course.green .course-code-tag { background: var(--green-light); color: var(--green); }
+.course.orange .course-code-tag { background: var(--orange-light); color: var(--orange); }
+
+.course-name { font-size: 16px; font-weight: 600; letter-spacing: -0.02em;
+  color: var(--tx); margin-bottom: 6px; line-height: 1.3; }
+.course-desc { font-size: 13px; color: var(--tx3); line-height: 1.55; flex: 1; }
+
+/* Inline status pill, sits in the head row instead of a full meta footer
+   so cards stay equal height across the row. */
+.course-status { display: inline-flex; align-items: center; gap: 5px;
+  margin-left: auto; flex-shrink: 0;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 9px; letter-spacing: 0.04em; color: var(--tx3); }
+.course-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--tx4); }
+.course-status.live .dot { background: var(--success); box-shadow: 0 0 0 2px rgba(0,166,126,0.18); }
+
+/* Meta caption sits beneath the description as a quiet footer line. */
+.course-meta-row { margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px; letter-spacing: 0.04em; color: var(--tx4);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.princ-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 560px) { .princ-grid { grid-template-columns: 1fr; } }
+.princ-card { border: 1px solid var(--border); border-radius: var(--rl);
+  padding: 18px 20px; background: var(--bg); }
+.princ-num { font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px; color: var(--tx4); margin-bottom: 6px; }
+.princ-title { font-size: 13px; font-weight: 600; color: var(--tx);
+  margin-bottom: 4px; letter-spacing: -0.01em; }
+.princ-desc { font-size: 12px; color: var(--tx3); line-height: 1.6; }
+
+.ftr { display: flex; align-items: center; justify-content: space-between;
+  padding-top: 24px; border-top: 1px solid var(--border);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px; color: var(--tx4); letter-spacing: 0.04em;
+  flex-wrap: wrap; gap: 12px; }
+.ftr a { color: var(--tx3); text-decoration: none; transition: color 0.12s; }
+.ftr a:hover { color: var(--tx); }
+.ftr-links { display: flex; align-items: center; gap: 18px; }
+
+/* ── Cerebral chrome primitives (used in dashboards, not just landing) ──
+   The button + segmented-control + brand-mark vocabulary that should
+   feel identical to cerebral.ahdahzeh.com / de.ahdahzeh.com. Use these
+   anywhere the surface needs the cerebral hand. */
+
+.cb-btn {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  color: var(--tx);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color 0.12s, color 0.12s, background 0.12s, box-shadow 0.12s;
+  white-space: nowrap;
+}
+.cb-btn:hover { border-color: var(--border2); background: var(--bg2); box-shadow: var(--shadow); }
+.cb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.cb-btn svg { width: 14px; height: 14px; color: var(--tx3); flex-shrink: 0; }
+.cb-btn:hover svg { color: var(--tx); }
+
+.cb-btn--solid {
+  background: var(--tx);
+  color: var(--bg);
+  border-color: var(--tx);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.cb-btn--solid:hover { background: var(--tx2); border-color: var(--tx2); color: var(--bg); }
+
+.cb-btn--icon {
+  width: 36px;
+  padding: 0;
+  justify-content: center;
+}
+
+.cb-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--tx2);
+}
+.cb-btn--ghost:hover { color: var(--tx); border-color: var(--border); background: var(--bg2); box-shadow: none; }
+
+.cb-btn--danger { color: var(--danger); border-color: rgba(224, 0, 0, 0.25); }
+.cb-btn--danger:hover { border-color: var(--danger); color: var(--danger); background: rgba(224, 0, 0, 0.05); }
+
+/* Segmented control: clear, labelled, easy to discover. Active tab uses
+   the Vercel-blue token so it reads as a primary navigational state. */
+.cb-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  overflow: hidden;
+  background: var(--bg2);
+  height: 36px;
+  padding: 3px;
+  gap: 2px;
+}
+.cb-seg__btn {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  padding: 0 14px;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--tx3);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: capitalize;
+}
+.cb-seg__btn svg { width: 13px; height: 13px; }
+.cb-seg__btn:hover { color: var(--tx); }
+.cb-seg__btn[data-active="true"] {
+  background: var(--bg);
+  color: var(--blue);
+  box-shadow: var(--shadow);
+}
+
+/* Brand mark used in dashboard + settings header. Same as landing. */
+.cb-brand { display: flex; align-items: center; gap: 10px; }
+.cb-brand__name { font-size: 14px; font-weight: 600; letter-spacing: -0.02em; color: var(--tx); }
+.cb-brand__sub {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--tx3);
+  letter-spacing: 0.04em;
+}
+
+/* Surface card matching .course shell minus the click affordances.
+   Useful for stats panels, settings sections, modals. */
+.cb-card {
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  background: var(--bg);
+  padding: 22px 24px;
 }

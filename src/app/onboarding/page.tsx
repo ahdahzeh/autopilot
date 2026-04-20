@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { ResumeUpload } from "@/components/resume-upload";
@@ -15,12 +15,26 @@ const SOURCES = [
 
 const DAILY_LIMITS = [10, 20, 30];
 
+type RoleFamily = "design" | "engineering" | "product" | "data" | "marketing" | "ops" | "other";
+
+const ROLE_FAMILIES: { id: RoleFamily; label: string; titlePlaceholder: string; locationPlaceholder: string }[] = [
+  { id: "design", label: "Design", titlePlaceholder: "Product Designer, Senior Product Designer, UX Designer", locationPlaceholder: "San Francisco, New York, Remote" },
+  { id: "engineering", label: "Engineering", titlePlaceholder: "Software Engineer, Senior Frontend Engineer, Staff Engineer", locationPlaceholder: "San Francisco, New York, Remote" },
+  { id: "product", label: "Product", titlePlaceholder: "Product Manager, Senior PM, Group Product Manager", locationPlaceholder: "San Francisco, New York, Remote" },
+  { id: "data", label: "Data & ML", titlePlaceholder: "Data Scientist, Analytics Engineer, ML Engineer", locationPlaceholder: "San Francisco, New York, Remote" },
+  { id: "marketing", label: "Marketing & Growth", titlePlaceholder: "Growth Marketer, Lifecycle Marketing, Brand Marketing Lead", locationPlaceholder: "New York, Los Angeles, Remote" },
+  { id: "ops", label: "Operations", titlePlaceholder: "Business Operations, Program Manager, Chief of Staff", locationPlaceholder: "New York, San Francisco, Remote" },
+  { id: "other", label: "Something else", titlePlaceholder: "Your target titles, comma separated", locationPlaceholder: "Cities you want to work in, comma separated" },
+];
+
 export default function OnboardingPage() {
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [prefilled, setPrefilled] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
 
   // Form state
+  const [roleFamily, setRoleFamily] = useState<RoleFamily>("design");
   const [titles, setTitles] = useState("");
   const [locations, setLocations] = useState("");
   const [salaryFloor, setSalaryFloor] = useState(0);
@@ -34,39 +48,52 @@ export default function OnboardingPage() {
   const router = useRouter();
   const supabase = createClient();
 
-  // Load prefilled profile if exists
+  const currentFamily = useMemo(
+    () => ROLE_FAMILIES.find((f) => f.id === roleFamily) ?? ROLE_FAMILIES[0],
+    [roleFamily],
+  );
+
   useEffect(() => {
     async function loadProfile() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .single();
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", user.id)
+          .single();
 
-      if (profile && profile.target_titles?.length > 0) {
-        setTitles(profile.target_titles.join(", "));
-        setLocations(profile.target_locations?.join(", ") || "");
-        setSalaryFloor(profile.salary_floor || 0);
-        setSources(profile.sources || ["linkedin", "builtin"]);
-        setDailyLimit(profile.daily_job_limit || 20);
-        setExcludedCompanies(profile.excluded_companies?.join(", ") || "");
-        setPrefilled(true);
-      }
-      if (profile?.resume_text?.length > 0) {
-        setResumeUploaded(true);
-        setResumeLength(profile.resume_text.length);
-      }
-      if (profile?.gmail_connected) {
-        setGmailConnected(true);
-      }
-      // Check if returning from Gmail OAuth
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("gmail") === "connected") {
-        setGmailConnected(true);
-        window.history.replaceState({}, "", "/onboarding");
+        if (profile && profile.target_titles?.length > 0) {
+          setTitles(profile.target_titles.join(", "));
+          setLocations(profile.target_locations?.join(", ") || "");
+          setSalaryFloor(profile.salary_floor || 0);
+          setSources(profile.sources || ["linkedin", "builtin"]);
+          setDailyLimit(profile.daily_job_limit || 20);
+          setExcludedCompanies(profile.excluded_companies?.join(", ") || "");
+          if (profile.role_family) setRoleFamily(profile.role_family as RoleFamily);
+          setPrefilled(true);
+        }
+        if (profile?.resume_text?.length > 0) {
+          setResumeUploaded(true);
+          setResumeLength(profile.resume_text.length);
+        }
+        if (profile?.gmail_connected) {
+          setGmailConnected(true);
+        }
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("gmail") === "connected") {
+          setGmailConnected(true);
+          setStep(STEPS_COUNT - 1);
+          window.history.replaceState({}, "", "/onboarding");
+        }
+      } finally {
+        // Always unblock the button — the handleComplete guard (checking
+        // non-empty titles/locations) is the real data safety. profileLoaded
+        // only prevents a click during the brief fetch window; a fetch error
+        // should never permanently disable the button.
+        setProfileLoaded(true);
       }
     }
     loadProfile();
@@ -75,11 +102,23 @@ export default function OnboardingPage() {
   async function handleComplete() {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
     const targetTitles = titles.split(",").map((t) => t.trim()).filter(Boolean);
     const targetLocations = locations.split(",").map((l) => l.trim()).filter(Boolean);
     const excluded = excludedCompanies.split(",").map((c) => c.trim()).filter(Boolean);
+
+    // Refuse to overwrite with empty values — prevents the Gmail-OAuth return
+    // race where the review step renders before loadProfile() repopulates form
+    // state, which silently wiped users' onboarding data in the past.
+    if (targetTitles.length === 0 || targetLocations.length === 0) {
+      setLoading(false);
+      alert("Please go back and fill in your target titles and locations before finishing.");
+      return;
+    }
 
     await supabase
       .from("profiles")
@@ -90,11 +129,18 @@ export default function OnboardingPage() {
         sources,
         daily_job_limit: dailyLimit,
         excluded_companies: excluded,
+        role_family: roleFamily,
         onboarded: true,
       })
       .eq("id", user.id);
 
-    router.push("/");
+    try {
+      await fetch("/api/jobs/scrape", { method: "POST" });
+    } catch {
+      // Non-fatal: the daily cron will catch them tomorrow.
+    }
+
+    router.push("/?welcome=1");
     router.refresh();
   }
 
@@ -109,8 +155,9 @@ export default function OnboardingPage() {
     <div key="welcome" className="text-center space-y-4">
       <h2 className="text-lg font-bold">Let's set up your job search</h2>
       <p className="text-sm text-muted">
-        Tell us what you're looking for and we'll find jobs for you every day.
+        Tell us what you're looking for and we'll find jobs for you every day. Takes about two minutes.
       </p>
+      <p className="text-[10px] text-muted mono uppercase tracking-widest">9 quick steps</p>
       {prefilled && (
         <p className="text-xs text-accent-purple">
           We pre-filled some preferences from your invite. Feel free to edit.
@@ -124,22 +171,46 @@ export default function OnboardingPage() {
       </button>
     </div>,
 
-    // Step 1: Roles
+    // Step 1: Role family
+    <div key="family" className="space-y-4">
+      <div>
+        <h2 className="text-sm font-bold">What kind of work are you looking for?</h2>
+        <p className="text-[10px] text-muted mt-1">Pick the closest fit. This tunes scraping and tailoring.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {ROLE_FAMILIES.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            onClick={() => setRoleFamily(f.id)}
+            className={`text-left px-3 py-2.5 text-sm rounded-lg border transition-all ${
+              roleFamily === f.id
+                ? "border-accent-purple bg-accent-purple/5 font-medium"
+                : "border-border hover:bg-card text-muted"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+    </div>,
+
+    // Step 2: Roles
     <div key="roles" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">What roles are you looking for?</h2>
-        <p className="text-[10px] text-muted mt-1">Comma-separated. e.g. "Product Designer, UX Designer"</p>
+        <p className="text-[10px] text-muted mt-1">Comma-separated. You can list 2 to 5 titles.</p>
       </div>
       <textarea
         value={titles}
         onChange={(e) => setTitles(e.target.value)}
         rows={3}
-        placeholder="Product Designer, Senior Product Designer"
+        placeholder={currentFamily.titlePlaceholder}
         className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
       />
     </div>,
 
-    // Step 2: Locations
+    // Step 3: Locations
     <div key="locations" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Where do you want to work?</h2>
@@ -149,12 +220,12 @@ export default function OnboardingPage() {
         value={locations}
         onChange={(e) => setLocations(e.target.value)}
         rows={3}
-        placeholder="San Francisco, New York, Remote"
+        placeholder={currentFamily.locationPlaceholder}
         className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
       />
     </div>,
 
-    // Step 3: Salary
+    // Step 4: Salary
     <div key="salary" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Minimum salary?</h2>
@@ -173,7 +244,7 @@ export default function OnboardingPage() {
       </div>
     </div>,
 
-    // Step 4: Sources
+    // Step 5: Sources
     <div key="sources" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Where should we look?</h2>
@@ -197,7 +268,7 @@ export default function OnboardingPage() {
       </div>
     </div>,
 
-    // Step 5: Daily limit
+    // Step 6: Daily limit
     <div key="limit" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">How many new jobs per day?</h2>
@@ -221,7 +292,7 @@ export default function OnboardingPage() {
       </div>
     </div>,
 
-    // Step 6: Excluded companies
+    // Step 7: Excluded companies
     <div key="excluded" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Any companies to skip?</h2>
@@ -236,12 +307,12 @@ export default function OnboardingPage() {
       />
     </div>,
 
-    // Step 7: Resume (required)
+    // Step 8: Resume (required)
     <div key="resume" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Upload your resume</h2>
         <p className="text-[10px] text-muted mt-1">
-          Required — we use this to score how well each job matches your background and extract keywords for smarter scraping.
+          Required. We use this to score how well each job matches your background and extract keywords for smarter scraping.
         </p>
       </div>
       <ResumeUpload
@@ -250,36 +321,44 @@ export default function OnboardingPage() {
       />
       {resumeUploaded && (
         <p className="text-[10px] text-accent-green mono">
-          ✓ Resume saved — {resumeLength.toLocaleString()} characters extracted
+          ✓ Resume saved. {resumeLength.toLocaleString()} characters extracted.
         </p>
       )}
     </div>,
 
-    // Step 8: Gmail connect (required)
+    // Step 9: Gmail (OPTIONAL)
     <div key="gmail" className="space-y-4">
       <div>
-        <h2 className="text-sm font-bold">Connect Gmail</h2>
+        <h2 className="text-sm font-bold">Connect Gmail (optional)</h2>
         <p className="text-[10px] text-muted mt-1">
-          Required. We read your inbox daily to auto-update your pipeline when you get interview requests, rejections, or offers — so you never miss a response.
+          We read your inbox daily to auto-update your pipeline when you get interview requests, rejections, or offers. You can skip this and connect later in Settings.
         </p>
       </div>
-      <a
-        href="/api/gmail/connect?origin=onboarding"
-        className="flex items-center gap-3 px-4 py-3 border border-accent-purple rounded-xl hover:bg-accent-purple/5 transition-colors w-full"
-      >
-        <span className="text-xl">📬</span>
-        <div className="text-left">
-          <p className="text-sm font-semibold">Connect Google Account</p>
-          <p className="text-[10px] text-muted">Read-only access · OAuth secured by Google</p>
+      {gmailConnected ? (
+        <div className="flex items-center gap-3 px-4 py-3 border border-accent-green/30 bg-accent-green/5 rounded-xl">
+          <span className="text-lg">✓</span>
+          <p className="text-sm font-semibold">Gmail connected</p>
         </div>
-      </a>
-      <p className="text-[10px] text-muted">We never send emails or store message content — only subject lines are scanned to detect status changes.</p>
+      ) : (
+        <a
+          href="/api/gmail/connect?origin=onboarding"
+          className="flex items-center gap-3 px-4 py-3 border border-accent-purple rounded-xl hover:bg-accent-purple/5 transition-colors w-full"
+        >
+          <span className="text-xl">📬</span>
+          <div className="text-left">
+            <p className="text-sm font-semibold">Connect Google Account</p>
+            <p className="text-[10px] text-muted">Read-only access. OAuth secured by Google.</p>
+          </div>
+        </a>
+      )}
+      <p className="text-[10px] text-muted">We never send emails or store message content. Only subject lines are scanned to detect status changes.</p>
     </div>,
 
-    // Step 9: Review
+    // Step 10: Review
     <div key="review" className="space-y-4">
       <h2 className="text-sm font-bold">Review your setup</h2>
       <div className="bg-card border border-border rounded-xl p-4 space-y-3 text-xs">
+        <Row label="Role family" value={currentFamily.label} />
         <Row label="Roles" value={titles || "Not set"} />
         <Row label="Locations" value={locations || "Not set"} />
         <Row label="Min Salary" value={salaryFloor ? `$${salaryFloor.toLocaleString()}` : "Any"} />
@@ -287,24 +366,22 @@ export default function OnboardingPage() {
         <Row label="Daily Limit" value={`${dailyLimit} jobs/day`} />
         <Row label="Excluded" value={excludedCompanies || "None"} />
         <Row label="Resume" value={resumeUploaded ? `✓ Uploaded (${resumeLength.toLocaleString()} chars)` : "⚠ Not uploaded"} />
-        <Row label="Gmail" value={gmailConnected ? "✓ Connected" : "⚠ Not connected"} />
+        <Row label="Gmail" value={gmailConnected ? "✓ Connected" : "Skipped (optional)"} />
       </div>
       {!resumeUploaded && (
         <p className="text-xs text-accent-red">Please upload your resume before continuing.</p>
       )}
-      {!gmailConnected && (
-        <p className="text-xs text-accent-red">Please connect Gmail before continuing.</p>
-      )}
       <button
         onClick={handleComplete}
-        disabled={loading || !titles.trim() || !resumeUploaded || !gmailConnected}
+        disabled={loading || !profileLoaded || !titles.trim() || !locations.trim() || !resumeUploaded}
         className="w-full py-2.5 text-sm font-semibold rounded-lg bg-accent-purple text-white hover:opacity-90 transition disabled:opacity-50"
       >
-        {loading ? "Setting up..." : "Start My Pipeline"}
+        {loading ? "Setting up..." : !profileLoaded ? "Loading your profile..." : "Start My Pipeline"}
       </button>
     </div>,
   ];
 
+  const STEPS_COUNT = steps.length;
   const totalSteps = steps.length;
   const isFirstStep = step === 0;
   const isLastStep = step === totalSteps - 1;
@@ -316,25 +393,26 @@ export default function OnboardingPage() {
           <h1 className="text-xl font-bold tracking-tight">
             Auto<span className="text-accent-purple">pilot</span>
           </h1>
-          {step > 0 && (
-            <div className="flex gap-1 justify-center mt-3">
-              {steps.slice(1).map((_, i) => (
-                <div
-                  key={i}
-                  className={`h-1 rounded-full transition-all ${
-                    i + 1 <= step ? "bg-accent-purple w-6" : "bg-border w-4"
-                  }`}
-                />
-              ))}
-            </div>
-          )}
+          <div className="flex gap-1 justify-center mt-3">
+            {steps.map((_, i) => (
+              <div
+                key={i}
+                className={`h-1 rounded-full transition-all ${
+                  i <= step ? "bg-accent-purple w-6" : "bg-border w-4"
+                }`}
+              />
+            ))}
+          </div>
+          <p className="text-[10px] text-muted mono uppercase tracking-widest mt-2">
+            Step {step + 1} of {totalSteps}
+          </p>
         </div>
 
         <div className="animate-fade-up" key={step}>
           {steps[step]}
         </div>
 
-        {!isFirstStep && !isLastStep && (
+        {!isFirstStep && (
           <div className="flex justify-between mt-4">
             <button
               onClick={() => setStep(step - 1)}
@@ -342,12 +420,14 @@ export default function OnboardingPage() {
             >
               Back
             </button>
-            <button
-              onClick={() => setStep(step + 1)}
-              className="px-4 py-2 text-xs font-semibold rounded-lg bg-foreground text-white hover:opacity-90 transition"
-            >
-              Next
-            </button>
+            {!isLastStep && (
+              <button
+                onClick={() => setStep(step + 1)}
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-foreground text-white hover:opacity-90 transition disabled:opacity-40"
+              >
+                Next
+              </button>
+            )}
           </div>
         )}
       </div>

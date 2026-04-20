@@ -1,10 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { Job } from "@/lib/types";
+import type { Job, DismissReason } from "@/lib/types";
 import { DismissButton } from "./dismiss-menu";
-
-type DismissReason = "expired" | "scam" | "not_interested" | "applied_elsewhere";
+import { JobDetailModal } from "./job-detail-modal";
 
 const STATUS_COLORS: Record<string, string> = {
   New: "bg-neutral-200 text-neutral-700",
@@ -27,6 +26,7 @@ export function JobTable({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [filter, setFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<"matchScore" | "dateApplied" | "dateFound">("dateFound");
+  const [detailJob, setDetailJob] = useState<Job | null>(null);
 
   const statuses = ["all", ...new Set(jobs.map((j) => j.status).filter(Boolean))];
 
@@ -53,6 +53,7 @@ export function JobTable({
   }
 
   return (
+    <>
     <div className="border border-border rounded-lg bg-card overflow-hidden">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 p-3 border-b border-border">
         <h3 className="text-[10px] uppercase tracking-widest text-muted">
@@ -100,7 +101,11 @@ export function JobTable({
           </thead>
           <tbody>
             {filtered.map((job) => (
-              <tr key={job.id} className="border-b border-border last:border-0 hover:bg-neutral-50 transition-colors">
+              <tr
+                key={job.id}
+                onClick={() => setDetailJob(job)}
+                className="border-b border-border last:border-0 hover:bg-neutral-50 transition-colors cursor-pointer"
+              >
                 <td className="px-3 py-2 font-medium">{job.company || job.name}</td>
                 <td className="px-3 py-2 text-muted max-w-[140px] truncate">{job.role}</td>
                 <td className="px-3 py-2 mono">
@@ -117,13 +122,19 @@ export function JobTable({
                 </td>
                 <td className="px-3 py-2 text-muted">{job.source}</td>
                 <td className="px-3 py-2 mono text-muted">{job.dateApplied ?? "--"}</td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center gap-1">
                     {job.applyLink && (
                       <a href={job.applyLink} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline text-[10px]">
                         Link
                       </a>
                     )}
+                    <button
+                      onClick={() => setDetailJob(job)}
+                      className="text-[10px] text-accent-purple hover:opacity-70 transition"
+                    >
+                      Tailor
+                    </button>
                     <DismissButton onDismiss={(reason) => onDismiss(job.id, reason)} />
                   </div>
                 </td>
@@ -133,5 +144,7 @@ export function JobTable({
         </table>
       </div>
     </div>
+    {detailJob && <JobDetailModal job={detailJob} onClose={() => setDetailJob(null)} />}
+    </>
   );
 }

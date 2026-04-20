@@ -56,26 +56,6 @@ export function computeStats(jobs: Job[]): Stats {
   return { total, applied, interviews, offers, rejected, noResponse, responseRate, avgDaysToResponse, avgMatchScore, highPriority, staleJobs, followUps };
 }
 
-export type FunnelStage = { name: string; count: number; rate: string };
-
-export function computeFunnel(jobs: Job[]): FunnelStage[] {
-  const total = jobs.length;
-  const applied = jobs.filter((j) => j.status !== "New" && j.status !== "Reviewing").length;
-  const phoneScreen = jobs.filter((j) => ["Phone Screen", "Interview", "Final Round", "Offer", "Accepted"].includes(j.outcome)).length;
-  const interview = jobs.filter((j) => ["Interview", "Final Round", "Offer", "Accepted"].includes(j.outcome)).length;
-  const finalRound = jobs.filter((j) => ["Final Round", "Offer", "Accepted"].includes(j.outcome)).length;
-  const offer = jobs.filter((j) => ["Offer", "Accepted"].includes(j.outcome)).length;
-
-  const pct = (n: number) => total > 0 ? `${((n / total) * 100).toFixed(1)}%` : "0%";
-  return [
-    { name: "Found", count: total, rate: "100%" },
-    { name: "Applied", count: applied, rate: pct(applied) },
-    { name: "Phone Screen", count: phoneScreen, rate: pct(phoneScreen) },
-    { name: "Interview", count: interview, rate: pct(interview) },
-    { name: "Final Round", count: finalRound, rate: pct(finalRound) },
-    { name: "Offer", count: offer, rate: pct(offer) },
-  ];
-}
 
 export type WeeklyData = { week: string; count: number };
 

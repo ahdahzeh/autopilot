@@ -24,19 +24,24 @@ export function ResumeUpload({
     setError("");
     setSuccess(false);
 
-    const form = new FormData();
-    if (file) form.append("file", file);
-    if (text) form.append("text", text);
+    try {
+      const form = new FormData();
+      if (file) form.append("file", file);
+      if (text) form.append("text", text);
 
-    const res = await fetch("/api/resume", { method: "POST", body: form });
-    const data = await res.json();
+      const res = await fetch("/api/resume", { method: "POST", body: form });
+      const data = await res.json();
 
-    setUploading(false);
-    if (!res.ok) {
-      setError(data.error || "Upload failed");
-    } else {
-      setSuccess(true);
-      onUploaded?.(data.length);
+      if (!res.ok) {
+        setError(data.error || "Upload failed");
+      } else {
+        setSuccess(true);
+        onUploaded?.(data.length);
+      }
+    } catch {
+      setError("Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -45,6 +50,12 @@ export function ResumeUpload({
     const ext = "." + file.name.split(".").pop()?.toLowerCase();
     if (!allowed.includes(ext)) {
       setError("Only PDF, DOC, DOCX, or TXT files are supported.");
+      return;
+    }
+    const MAX_BYTES = 4 * 1024 * 1024; // 4 MB (Vercel caps function bodies at 4.5 MB)
+    if (file.size > MAX_BYTES) {
+      const mb = (file.size / 1024 / 1024).toFixed(1);
+      setError(`File is too large (${mb} MB). Max size is 4 MB. Try exporting a lighter PDF or pasting text instead.`);
       return;
     }
     submit(file);
@@ -77,7 +88,7 @@ export function ResumeUpload({
 
       {!!existingLength && existingLength > 0 && !success && (
         <p className="text-[10px] text-accent-green mono">
-          Resume on file — {existingLength.toLocaleString()} characters. Upload a new one to replace.
+          Resume on file: {existingLength.toLocaleString()} characters. Upload a new one to replace.
         </p>
       )}
 
@@ -103,7 +114,7 @@ export function ResumeUpload({
           <div className="space-y-2">
             <p className="text-2xl">📄</p>
             <p className="text-sm font-medium">Drop your resume here</p>
-            <p className="text-[10px] text-muted">PDF, DOC, DOCX, or TXT · Click to browse</p>
+            <p className="text-[10px] text-muted">PDF, DOC, DOCX, or TXT · Max 4 MB · Click to browse</p>
           </div>
         </div>
       )}
@@ -114,7 +125,7 @@ export function ResumeUpload({
             value={manualText}
             onChange={(e) => setManualText(e.target.value)}
             rows={10}
-            placeholder="Paste your resume text here — work experience, skills, education..."
+            placeholder="Paste your resume text here: work experience, skills, education..."
             className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none font-mono text-xs"
           />
           <button
