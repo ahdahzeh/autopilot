@@ -78,6 +78,7 @@ export default function SettingsPage() {
 
   // Tracked companies (Greenhouse / Lever / Ashby)
   const [companies, setCompanies] = useState<TrackedCompany[]>([]);
+  const [poolCount, setPoolCount] = useState(0);
   const [newCompanyUrl, setNewCompanyUrl] = useState("");
   const [newCompanyName, setNewCompanyName] = useState("");
   const [addingCompany, setAddingCompany] = useState(false);
@@ -145,8 +146,9 @@ export default function SettingsPage() {
       try {
         const res = await fetch("/api/companies");
         if (res.ok) {
-          const { companies: rows } = (await res.json()) as { companies: TrackedCompany[] };
-          setCompanies(rows ?? []);
+          const json = (await res.json()) as { companies: TrackedCompany[]; pool_count: number };
+          setCompanies(json.companies ?? []);
+          setPoolCount(json.pool_count ?? 0);
         }
       } catch {
         // Non-fatal — tracked companies is additive to the existing flow.
@@ -175,6 +177,7 @@ export default function SettingsPage() {
         const without = prev.filter((c) => c.id !== data.company.id);
         return [data.company, ...without];
       });
+      setPoolCount((n) => n + 1);
       setNewCompanyUrl("");
       setNewCompanyName("");
     } finally {
@@ -450,9 +453,23 @@ export default function SettingsPage() {
 
         {/* Tracked Companies (ATS) */}
         <Section title="Tracked Companies">
+          {/* Community pool banner */}
+          <div className="flex items-center justify-between px-4 py-3 border border-border rounded-xl bg-card mb-3">
+            <div>
+              <p className="text-xs font-semibold">Community pool</p>
+              <p className="text-[10px] text-muted mt-0.5">
+                Scraped for every user with Greenhouse / Lever / Ashby enabled
+              </p>
+            </div>
+            <span className="mono text-sm font-bold tabular-nums">
+              {poolCount > 0 ? poolCount : "—"}
+            </span>
+          </div>
+
+          {/* Add form */}
           <div className="bg-card border border-border rounded-xl p-4 space-y-3 mb-3">
             <p className="text-[10px] text-muted">
-              Paste a company&apos;s Greenhouse, Lever, or Ashby board URL. We&apos;ll pull every open role directly from their ATS each morning.
+              Add a company by its ATS board URL. Your addition joins the community pool — every user benefits automatically.
             </p>
             <Field label="Board URL" hint="jobs.lever.co/... · boards.greenhouse.io/... · jobs.ashbyhq.com/...">
               <input
@@ -488,22 +505,29 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          {/* User's own additions */}
           {companies.length > 0 ? (
             <div className="space-y-2">
+              <p className="text-[10px] text-muted uppercase tracking-widest font-medium mb-1">Your additions</p>
               {companies.map((c) => (
                 <div
                   key={c.id}
                   className="flex items-center justify-between gap-2 px-4 py-3 border border-border rounded-xl bg-card"
                 >
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate">{c.name || c.slug}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold truncate">{c.name || c.slug}</p>
+                      <span className="mono text-[8px] uppercase tracking-widest px-1.5 py-0.5 rounded border border-border text-muted">
+                        In pool
+                      </span>
+                    </div>
                     <p className="text-[9px] mono text-muted uppercase tracking-widest">
                       {c.ats_type} · {c.slug}
                     </p>
                   </div>
                   <button
                     onClick={() => removeCompany(c.id)}
-                    className="text-[10px] mono uppercase tracking-widest text-muted hover:text-accent-red transition-colors"
+                    className="text-[10px] mono uppercase tracking-widest text-muted hover:text-accent-red transition-colors shrink-0"
                   >
                     Remove
                   </button>
@@ -511,7 +535,7 @@ export default function SettingsPage() {
               ))}
             </div>
           ) : (
-            <p className="text-[10px] text-muted">No companies tracked yet. Globally curated companies still run in the background.</p>
+            <p className="text-[10px] text-muted">No additions yet. Be the first to grow the pool.</p>
           )}
         </Section>
 

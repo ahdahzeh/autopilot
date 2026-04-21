@@ -1,0 +1,178 @@
+<h2>Right Panel Options</h2>
+<p class="subtitle">What should the context panel (right 40%) prioritize?</p>
+
+<div class="cards">
+  <!-- Option A: Stats + Mini Funnel -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family: monospace; font-size: 11px; background: #fafafa; border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden; padding: 16px; width: 100%;">
+        <!-- Stats Grid -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px;">
+          <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 8px 10px;">
+            <div style="font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #999;">Total</div>
+            <div style="font-size: 20px; font-weight: 700;">196</div>
+          </div>
+          <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 8px 10px;">
+            <div style="font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #999;">Applied</div>
+            <div style="font-size: 20px; font-weight: 700; color: #00FF66;">69</div>
+          </div>
+          <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 8px 10px;">
+            <div style="font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #999;">Response</div>
+            <div style="font-size: 20px; font-weight: 700;">8.7%</div>
+          </div>
+          <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 8px 10px;">
+            <div style="font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #999;">Interviews</div>
+            <div style="font-size: 20px; font-weight: 700; color: #00FF66;">1</div>
+          </div>
+        </div>
+        <!-- Mini Funnel -->
+        <div style="font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #999; margin-bottom: 8px;">Funnel</div>
+        <div style="margin-bottom: 4px;">
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 9px; margin-bottom: 4px;">
+            <span style="color: #999; width: 50px; text-align: right;">Found</span>
+            <div style="background: #e5e5e5; height: 10px; flex: 1; border-radius: 2px;"><div style="background: #a3a3a3; height: 100%; width: 100%; border-radius: 2px;"></div></div>
+            <span style="width: 24px; font-weight: 600;">196</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 9px; margin-bottom: 4px;">
+            <span style="color: #999; width: 50px; text-align: right;">Applied</span>
+            <div style="background: #e5e5e5; height: 10px; flex: 1; border-radius: 2px;"><div style="background: #00FF66; height: 100%; width: 35%; border-radius: 2px;"></div></div>
+            <span style="width: 24px; font-weight: 600;">69</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 9px; margin-bottom: 4px;">
+            <span style="color: #999; width: 50px; text-align: right;">Interview</span>
+            <div style="background: #e5e5e5; height: 10px; flex: 1; border-radius: 2px;"><div style="background: #3b82f6; height: 100%; width: 1.4%; border-radius: 2px;"></div></div>
+            <span style="width: 24px; font-weight: 600;">1</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 9px; margin-bottom: 4px;">
+            <span style="color: #999; width: 50px; text-align: right;">Offer</span>
+            <div style="background: #e5e5e5; height: 10px; flex: 1; border-radius: 2px;"></div>
+            <span style="width: 24px; font-weight: 600;">0</span>
+          </div>
+        </div>
+        <!-- Status Pills -->
+        <div style="font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #999; margin-top: 14px; margin-bottom: 8px;">Status</div>
+        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+          <span style="background: #e5e5e5; padding: 3px 8px; border-radius: 10px; font-size: 9px;">New 123</span>
+          <span style="background: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 10px; font-size: 9px;">Applied 68</span>
+          <span style="background: #dbeafe; color: #1e40af; padding: 3px 8px; border-radius: 10px; font-size: 9px;">Interview 1</span>
+          <span style="background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 10px; font-size: 9px;">Rejected 4</span>
+        </div>
+        <!-- View Insights Link -->
+        <div style="margin-top: 16px; text-align: center;">
+          <span style="font-size: 10px; color: #3b82f6; border-bottom: 1px solid #3b82f6; cursor: pointer;">View Full Insights ↓</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Stats + Funnel + Status</h3>
+      <p>Pure numbers. Compact. Full charts live behind "View Insights" link that scrolls to analytics section below the fold. Cleanest, most scannable.</p>
+    </div>
+  </div>
+
+  <!-- Option B: Stats + Toggleable Chart -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family: monospace; font-size: 11px; background: #fafafa; border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden; padding: 16px; width: 100%;">
+        <!-- Compact Stats Row -->
+        <div style="display: flex; gap: 12px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid #e5e5e5;">
+          <div style="flex: 1; text-align: center;">
+            <div style="font-size: 18px; font-weight: 700;">196</div>
+            <div style="font-size: 7px; text-transform: uppercase; color: #999; letter-spacing: 1px;">Total</div>
+          </div>
+          <div style="flex: 1; text-align: center;">
+            <div style="font-size: 18px; font-weight: 700; color: #00FF66;">69</div>
+            <div style="font-size: 7px; text-transform: uppercase; color: #999; letter-spacing: 1px;">Applied</div>
+          </div>
+          <div style="flex: 1; text-align: center;">
+            <div style="font-size: 18px; font-weight: 700;">8.7%</div>
+            <div style="font-size: 7px; text-transform: uppercase; color: #999; letter-spacing: 1px;">Response</div>
+          </div>
+          <div style="flex: 1; text-align: center;">
+            <div style="font-size: 18px; font-weight: 700; color: #00FF66;">1</div>
+            <div style="font-size: 7px; text-transform: uppercase; color: #999; letter-spacing: 1px;">Interview</div>
+          </div>
+        </div>
+        <!-- Chart Toggle -->
+        <div style="display: flex; gap: 0; margin-bottom: 10px; border: 1px solid #e5e5e5; border-radius: 4px; overflow: hidden;">
+          <span style="flex: 1; text-align: center; font-size: 8px; padding: 4px; background: #0a0a0a; color: #fff; font-weight: 600;">Velocity</span>
+          <span style="flex: 1; text-align: center; font-size: 8px; padding: 4px; color: #999; border-left: 1px solid #e5e5e5;">Sources</span>
+          <span style="flex: 1; text-align: center; font-size: 8px; padding: 4px; color: #999; border-left: 1px solid #e5e5e5;">Funnel</span>
+        </div>
+        <!-- Chart Area -->
+        <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 6px; padding: 12px; height: 120px; position: relative;">
+          <!-- Fake area chart -->
+          <svg width="100%" height="100%" viewBox="0 0 200 80" preserveAspectRatio="none">
+            <polyline points="0,60 30,50 60,20 90,15 120,30 150,45 180,55 200,60" fill="none" stroke="#00FF66" stroke-width="2"/>
+            <polygon points="0,60 30,50 60,20 90,15 120,30 150,45 180,55 200,60 200,80 0,80" fill="#00FF6615"/>
+          </svg>
+          <div style="position: absolute; bottom: 4px; left: 12px; font-size: 8px; color: #999;">Feb 16</div>
+          <div style="position: absolute; bottom: 4px; right: 12px; font-size: 8px; color: #999;">Apr 2</div>
+        </div>
+        <!-- Status Pills -->
+        <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 12px;">
+          <span style="background: #e5e5e5; padding: 3px 8px; border-radius: 10px; font-size: 9px;">New 123</span>
+          <span style="background: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 10px; font-size: 9px;">Applied 68</span>
+          <span style="background: #dbeafe; color: #1e40af; padding: 3px 8px; border-radius: 10px; font-size: 9px;">Interview 1</span>
+          <span style="background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 10px; font-size: 9px;">Rejected 4</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Stats + Toggleable Chart</h3>
+      <p>Compact stats row up top. Below it, a chart area with toggle tabs: Velocity / Sources / Funnel. More visual, keeps insights in view without a separate section.</p>
+    </div>
+  </div>
+
+  <!-- Option C: Stats + Pipeline Health Score -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family: monospace; font-size: 11px; background: #fafafa; border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden; padding: 16px; width: 100%;">
+        <!-- Pipeline Health -->
+        <div style="text-align: center; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #e5e5e5;">
+          <div style="font-size: 8px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; margin-bottom: 8px;">Pipeline Health</div>
+          <div style="font-size: 48px; font-weight: 800; color: #FF3B3B; line-height: 1;">42</div>
+          <div style="font-size: 10px; color: #FF3B3B; margin-top: 4px; font-weight: 600;">Needs Attention</div>
+          <div style="font-size: 9px; color: #999; margin-top: 6px;">Low response rate · Many stale jobs · Apply more this week</div>
+        </div>
+        <!-- Breakdown -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px;">
+          <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 6px 8px; display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 8px; color: #999;">Velocity</span>
+            <span style="font-size: 12px; font-weight: 700; color: #FF3B3B;">↓</span>
+          </div>
+          <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 6px 8px; display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 8px; color: #999;">Response</span>
+            <span style="font-size: 12px; font-weight: 700; color: #FF3B3B;">8.7%</span>
+          </div>
+          <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 6px 8px; display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 8px; color: #999;">Interviews</span>
+            <span style="font-size: 12px; font-weight: 700; color: #00FF66;">1</span>
+          </div>
+          <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 6px 8px; display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 8px; color: #999;">Pipeline</span>
+            <span style="font-size: 12px; font-weight: 700;">196</span>
+          </div>
+        </div>
+        <!-- Weekly Nudge -->
+        <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 6px; padding: 10px; margin-bottom: 12px;">
+          <div style="font-size: 8px; text-transform: uppercase; color: #999; margin-bottom: 4px;">This Week</div>
+          <div style="font-size: 10px;">Applied <strong>3</strong> · Goal <strong>10</strong></div>
+          <div style="background: #e5e5e5; height: 6px; border-radius: 3px; margin-top: 6px;">
+            <div style="background: #FF3B3B; height: 100%; width: 30%; border-radius: 3px;"></div>
+          </div>
+        </div>
+        <!-- Status Pills -->
+        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+          <span style="background: #e5e5e5; padding: 3px 8px; border-radius: 10px; font-size: 9px;">New 123</span>
+          <span style="background: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 10px; font-size: 9px;">Applied 68</span>
+          <span style="background: #dbeafe; color: #1e40af; padding: 3px 8px; border-radius: 10px; font-size: 9px;">Interview 1</span>
+          <span style="background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 10px; font-size: 9px;">Rejected 4</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — Pipeline Health Score</h3>
+      <p>One big number (0-100) that synthesizes velocity, response rate, and pipeline freshness. Color-coded: green = on track, red = pick it up. Weekly goal progress bar. Family-friendly — anyone can glance and know if things are going well.</p>
+    </div>
+  </div>
+</div>

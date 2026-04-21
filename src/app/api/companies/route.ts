@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -43,21 +44,32 @@ export function parseBoardUrl(raw: string): Parsed | null {
   return null;
 }
 
-// GET /api/companies — list current user's tracked companies (global rows excluded;
-// globals are applied invisibly at scrape time so the UI stays focused on user-owned rows).
+// GET /api/companies — list current user's personal additions + pool_count.
+// Global seed rows (user_id IS NULL) are not shown individually here — the UI
+// surfaces the aggregate count so users know the pool is active.
 export async function GET() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data, error } = await supabase
-    .from("target_companies")
-    .select("id, ats_type, slug, name, active, created_at")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false });
+  const [userRows, poolCount] = await Promise.all([
+    supabase
+      .from("target_companies")
+      .select("id, ats_type, slug, name, active, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false }),
+    // Use service client so we bypass RLS and get the true global count.
+    createServiceClient()
+      .from("target_companies")
+      .select("*", { count: "exact", head: true })
+      .eq("active", true),
+  ]);
 
-  if (error) return Response.json({ error: error.message }, { status: 500 });
-  return Response.json({ companies: data ?? [] });
+  if (userRows.error) return Response.json({ error: userRows.error.message }, { status: 500 });
+  return Response.json({
+    companies: userRows.data ?? [],
+    pool_count: poolCount.count ?? 0,
+  });
 }
 
 // POST /api/companies — add a company by URL or short-form

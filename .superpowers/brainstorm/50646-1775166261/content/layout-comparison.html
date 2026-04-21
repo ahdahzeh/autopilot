@@ -1,0 +1,186 @@
+<h2>Navigation & Layout Comparison</h2>
+<p class="subtitle">Which structure works better for a shared job search tool?</p>
+
+<div class="cards">
+  <!-- Option A: Tabbed + Mission Control -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family: monospace; font-size: 11px; background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden;">
+        <!-- Header -->
+        <div style="padding: 12px 16px; border-bottom: 1px solid #e5e5e5; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 16px; font-weight: 700; letter-spacing: -0.5px;">Autopilot</div>
+          </div>
+          <div style="display: flex; gap: 16px; font-size: 11px;">
+            <span style="font-weight: 700; border-bottom: 2px solid #0a0a0a; padding-bottom: 4px;">Today</span>
+            <span style="color: #999;">Pipeline</span>
+            <span style="color: #999;">Insights</span>
+          </div>
+        </div>
+        <!-- Vitals Strip -->
+        <div style="padding: 8px 16px; background: #fafafa; border-bottom: 1px solid #e5e5e5; display: flex; gap: 20px; font-size: 10px; color: #737373;">
+          <span><strong style="color: #0a0a0a;">196</strong> total</span>
+          <span><strong style="color: #00FF66;">69</strong> applied</span>
+          <span><strong style="color: #00FF66;">1</strong> interview</span>
+          <span><strong style="color: #00FF66;">0</strong> offers</span>
+          <span><strong style="color: #0a0a0a;">8.7%</strong> response</span>
+        </div>
+        <!-- Today Tab Content -->
+        <div style="padding: 16px;">
+          <!-- Action Queue Header -->
+          <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; margin-bottom: 10px;">Next Actions</div>
+          <!-- Action Card 1 -->
+          <div style="border: 1px solid #e5e5e5; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-weight: 600; font-size: 12px;">Stripe</div>
+              <div style="color: #999; font-size: 10px;">Product Designer · <span style="color: #00FF66; font-weight: 700;">9/10</span></div>
+            </div>
+            <div style="display: flex; gap: 4px;">
+              <span style="background: #00FF66; color: #000; padding: 2px 8px; border-radius: 3px; font-size: 9px; font-weight: 600;">Apply</span>
+              <span style="background: #f5f5f5; padding: 2px 8px; border-radius: 3px; font-size: 9px; color: #999;">Dismiss</span>
+            </div>
+          </div>
+          <!-- Action Card 2 -->
+          <div style="border: 1px solid #e5e5e5; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-weight: 600; font-size: 12px;">Samba TV</div>
+              <div style="color: #999; font-size: 10px;">Sr. Product Designer · Applied 12d ago</div>
+            </div>
+            <div style="display: flex; gap: 4px;">
+              <span style="background: #f0f7ff; color: #3b82f6; padding: 2px 8px; border-radius: 3px; font-size: 9px; font-weight: 600;">Follow Up</span>
+              <span style="background: #f5f5f5; padding: 2px 8px; border-radius: 3px; font-size: 9px; color: #999;">Dismiss</span>
+            </div>
+          </div>
+          <!-- Action Card 3 -->
+          <div style="border: 1px solid #e5e5e5; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-weight: 600; font-size: 12px;">Paramount+</div>
+              <div style="color: #999; font-size: 10px;">Product Designer · Applied 12d ago</div>
+            </div>
+            <div style="display: flex; gap: 4px;">
+              <span style="background: #f0f7ff; color: #3b82f6; padding: 2px 8px; border-radius: 3px; font-size: 9px; font-weight: 600;">Follow Up</span>
+              <span style="background: #f5f5f5; padding: 2px 8px; border-radius: 3px; font-size: 9px; color: #999;">Dismiss</span>
+            </div>
+          </div>
+          <div style="color: #999; font-size: 10px; text-align: center; padding: 4px;">+ 12 more actions</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Tabbed Mission Control</h3>
+      <p><strong>Today / Pipeline / Insights</strong> as tabs. Vitals strip always visible. Today tab leads with an action queue — cards with Apply, Follow Up, and Dismiss buttons. Charts live on a separate Insights tab. Full table lives on Pipeline tab.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Action-first — opens to "do this next"</li><li>Clean separation of concerns</li><li>Family can jump in and immediately act</li><li>Charts accessible but not in the way</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Extra click to see insights or full pipeline</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option B: Split View -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="font-family: monospace; font-size: 11px; background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden;">
+        <!-- Header -->
+        <div style="padding: 12px 16px; border-bottom: 1px solid #e5e5e5;">
+          <div style="font-size: 16px; font-weight: 700; letter-spacing: -0.5px;">Autopilot</div>
+        </div>
+        <!-- Split Layout -->
+        <div style="display: flex;">
+          <!-- Left: Action Feed (60%) -->
+          <div style="flex: 6; padding: 12px; border-right: 1px solid #e5e5e5;">
+            <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px; color: #999; margin-bottom: 10px;">Action Feed</div>
+            <!-- Card -->
+            <div style="border: 1px solid #e5e5e5; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <div style="font-weight: 600; font-size: 11px;">Stripe</div>
+                <div style="color: #999; font-size: 9px;">Product Designer · <span style="color: #00FF66;">9/10</span></div>
+              </div>
+              <div style="display: flex; gap: 3px;">
+                <span style="background: #00FF66; color: #000; padding: 2px 6px; border-radius: 3px; font-size: 8px;">Apply</span>
+                <span style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 8px; color: #999;">X</span>
+              </div>
+            </div>
+            <div style="border: 1px solid #e5e5e5; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <div style="font-weight: 600; font-size: 11px;">Samba TV</div>
+                <div style="color: #999; font-size: 9px;">Sr. Product Designer · 12d ago</div>
+              </div>
+              <div style="display: flex; gap: 3px;">
+                <span style="background: #f0f7ff; color: #3b82f6; padding: 2px 6px; border-radius: 3px; font-size: 8px;">Follow Up</span>
+                <span style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 8px; color: #999;">X</span>
+              </div>
+            </div>
+            <div style="border: 1px solid #e5e5e5; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <div style="font-weight: 600; font-size: 11px;">Paramount+</div>
+                <div style="color: #999; font-size: 9px;">Product Designer · 12d ago</div>
+              </div>
+              <div style="display: flex; gap: 3px;">
+                <span style="background: #f0f7ff; color: #3b82f6; padding: 2px 6px; border-radius: 3px; font-size: 8px;">Follow Up</span>
+                <span style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 8px; color: #999;">X</span>
+              </div>
+            </div>
+            <div style="color: #999; font-size: 9px; padding: 4px;">+ 12 more</div>
+          </div>
+          <!-- Right: Context Panel (40%) -->
+          <div style="flex: 4; padding: 12px; background: #fafafa;">
+            <!-- Stats -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
+              <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 6px 8px;">
+                <div style="font-size: 8px; text-transform: uppercase; color: #999;">Total</div>
+                <div style="font-size: 16px; font-weight: 700;">196</div>
+              </div>
+              <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 6px 8px;">
+                <div style="font-size: 8px; text-transform: uppercase; color: #999;">Applied</div>
+                <div style="font-size: 16px; font-weight: 700; color: #00FF66;">69</div>
+              </div>
+              <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 6px 8px;">
+                <div style="font-size: 8px; text-transform: uppercase; color: #999;">Response</div>
+                <div style="font-size: 16px; font-weight: 700;">8.7%</div>
+              </div>
+              <div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; padding: 6px 8px;">
+                <div style="font-size: 8px; text-transform: uppercase; color: #999;">Interviews</div>
+                <div style="font-size: 16px; font-weight: 700; color: #00FF66;">1</div>
+              </div>
+            </div>
+            <!-- Mini Funnel -->
+            <div style="font-size: 8px; text-transform: uppercase; color: #999; margin-bottom: 6px;">Funnel</div>
+            <div style="margin-bottom: 4px;">
+              <div style="display: flex; align-items: center; gap: 4px; font-size: 9px; margin-bottom: 3px;">
+                <span style="color: #999; width: 40px; text-align: right;">Found</span>
+                <div style="background: #e5e5e5; height: 8px; flex: 1; border-radius: 2px;"><div style="background: #a3a3a3; height: 100%; width: 100%; border-radius: 2px;"></div></div>
+                <span style="width: 20px;">196</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 4px; font-size: 9px; margin-bottom: 3px;">
+                <span style="color: #999; width: 40px; text-align: right;">Applied</span>
+                <div style="background: #e5e5e5; height: 8px; flex: 1; border-radius: 2px;"><div style="background: #00FF66; height: 100%; width: 35%; border-radius: 2px;"></div></div>
+                <span style="width: 20px;">69</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 4px; font-size: 9px; margin-bottom: 3px;">
+                <span style="color: #999; width: 40px; text-align: right;">Interview</span>
+                <div style="background: #e5e5e5; height: 8px; flex: 1; border-radius: 2px;"><div style="background: #3b82f6; height: 100%; width: 1%; border-radius: 2px;"></div></div>
+                <span style="width: 20px;">1</span>
+              </div>
+            </div>
+            <!-- Status -->
+            <div style="font-size: 8px; text-transform: uppercase; color: #999; margin-top: 10px; margin-bottom: 6px;">Status</div>
+            <div style="display: flex; gap: 3px; flex-wrap: wrap;">
+              <span style="background: #e5e5e5; padding: 2px 6px; border-radius: 10px; font-size: 8px;">New 123</span>
+              <span style="background: #dcfce7; padding: 2px 6px; border-radius: 10px; font-size: 8px;">Applied 68</span>
+              <span style="background: #dbeafe; padding: 2px 6px; border-radius: 10px; font-size: 8px;">Interview 1</span>
+              <span style="background: #fee2e2; padding: 2px 6px; border-radius: 10px; font-size: 8px;">Rejected 4</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Split View</h3>
+      <p><strong>Left 60%:</strong> Action feed with the same Apply/Follow Up/Dismiss cards. <strong>Right 40%:</strong> Always-visible context panel with stats, mini funnel, and status pills. No tabs — everything on one page. Full table via "View All" at the bottom.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Actions + context visible simultaneously</li><li>No tab switching needed</li><li>Information-dense for power users</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>More visual noise — both panels compete</li><li>Harder on mobile — columns collapse</li><li>Charts still need a separate view or get crammed</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>

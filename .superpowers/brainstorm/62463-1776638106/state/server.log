@@ -1,0 +1,3 @@
+{"type":"server-started","port":58786,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:58786","screen_dir":"/Users/adazeoviawe/Documents/Scour/autopilot/.superpowers/brainstorm/62463-1776638106/content","state_dir":"/Users/adazeoviawe/Documents/Scour/autopilot/.superpowers/brainstorm/62463-1776638106/state"}
+{"type":"screen-added","file":"/Users/adazeoviawe/Documents/Scour/autopilot/.superpowers/brainstorm/62463-1776638106/content/feature-focus.html"}
+{"type":"server-stopped","reason":"idle timeout"}

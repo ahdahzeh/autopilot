@@ -47,12 +47,13 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
     return { user_id: user.id, skipped: true, reason: "no scraper URL configured" };
   }
 
-  // Tracked ATS companies: user's own rows + global seed rows (user_id IS NULL).
-  // The service client bypasses RLS so we get both sets in one query.
+  // Pull ALL active companies — global seed rows (user_id IS NULL) AND every
+  // company added by any user. The service client bypasses RLS so we see the
+  // full community pool. Users who don't have ATS sources enabled won't have
+  // ATS scrapers run anyway (the Python service checks req.sources first).
   const { data: companyRows } = await supabase
     .from("target_companies")
     .select("ats_type, slug, name")
-    .or(`user_id.is.null,user_id.eq.${user.id}`)
     .eq("active", true);
 
   const companies = (companyRows ?? []).map((c) => ({

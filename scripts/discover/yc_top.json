@@ -1,0 +1,226 @@
+[
+  {
+    "name": "Gusto",
+    "domain": "gusto.com"
+  },
+  {
+    "name": "Matterport",
+    "domain": "matterport.com"
+  },
+  {
+    "name": "Amplitude",
+    "domain": "amplitude.com"
+  },
+  {
+    "name": "GOAT Group",
+    "domain": "goatgroup.com"
+  },
+  {
+    "name": "Presto",
+    "domain": "presto.com"
+  },
+  {
+    "name": "PagerDuty",
+    "domain": "pagerduty.com"
+  },
+  {
+    "name": "Stripe",
+    "domain": "stripe.com"
+  },
+  {
+    "name": "Mixpanel",
+    "domain": "mixpanel.com"
+  },
+  {
+    "name": "Airbnb",
+    "domain": "airbnb.com"
+  },
+  {
+    "name": "Dropbox",
+    "domain": "dropbox.com"
+  },
+  {
+    "name": "Scribd",
+    "domain": "scribd.com"
+  },
+  {
+    "name": "SmartAsset",
+    "domain": "smartasset.com"
+  },
+  {
+    "name": "Coinbase",
+    "domain": "coinbase.com"
+  },
+  {
+    "name": "Zapier",
+    "domain": "zapier.com"
+  },
+  {
+    "name": "Benchling",
+    "domain": "benchling.com"
+  },
+  {
+    "name": "Instacart",
+    "domain": "instacart.com"
+  },
+  {
+    "name": "Fivetran",
+    "domain": "fivetran.com"
+  },
+  {
+    "name": "DoorDash",
+    "domain": "doordash.com"
+  },
+  {
+    "name": "Webflow",
+    "domain": "webflow.com"
+  },
+  {
+    "name": "Bellabeat",
+    "domain": "bellabeat.com"
+  },
+  {
+    "name": "Flexport",
+    "domain": "flexport.com"
+  },
+  {
+    "name": "Weave",
+    "domain": "getweave.com"
+  },
+  {
+    "name": "Algolia",
+    "domain": "algolia.com"
+  },
+  {
+    "name": "Checkr",
+    "domain": "checkr.com"
+  },
+  {
+    "name": "Rigetti Computing",
+    "domain": "rigetti.com"
+  },
+  {
+    "name": "ShipBob",
+    "domain": "shipbob.com"
+  },
+  {
+    "name": "Ginkgo Bioworks",
+    "domain": "ginkgobioworks.com"
+  },
+  {
+    "name": "Oklo",
+    "domain": "oklo.com"
+  },
+  {
+    "name": "Notable Labs",
+    "domain": "notablelabs.com"
+  },
+  {
+    "name": "GrubMarket",
+    "domain": "grubmarket.com"
+  },
+  {
+    "name": "EquipmentShare",
+    "domain": "equipmentshare.com"
+  },
+  {
+    "name": "GitLab",
+    "domain": "gitlab.com"
+  },
+  {
+    "name": "Razorpay",
+    "domain": "razorpay.com"
+  },
+  {
+    "name": "Scentbird",
+    "domain": "scentbird.com"
+  },
+  {
+    "name": "Go1",
+    "domain": "go1.com"
+  },
+  {
+    "name": "Podium",
+    "domain": "podium.com"
+  },
+  {
+    "name": "Rappi",
+    "domain": "rappi.com"
+  },
+  {
+    "name": "Meesho",
+    "domain": "meesho.com"
+  },
+  {
+    "name": "Scale AI",
+    "domain": "scale.com"
+  },
+  {
+    "name": "Bird",
+    "domain": "bird.com"
+  },
+  {
+    "name": "Rippling",
+    "domain": "rippling.com"
+  },
+  {
+    "name": "Clipboard",
+    "domain": "clipboardhealth.com"
+  },
+  {
+    "name": "Faire",
+    "domain": "faire.com"
+  },
+  {
+    "name": "Brex",
+    "domain": "brex.com"
+  },
+  {
+    "name": "Flock Safety",
+    "domain": "flocksafety.com"
+  },
+  {
+    "name": "Newfront",
+    "domain": "newfront.com"
+  },
+  {
+    "name": "Groww",
+    "domain": "groww.in"
+  },
+  {
+    "name": "Honeylove",
+    "domain": "honeylove.com"
+  },
+  {
+    "name": "Momentus",
+    "domain": "momentus.space"
+  },
+  {
+    "name": "Wave",
+    "domain": "wave.com"
+  },
+  {
+    "name": "Deel",
+    "domain": "deel.com"
+  },
+  {
+    "name": "Nowports",
+    "domain": "nowports.com"
+  },
+  {
+    "name": "Odeko",
+    "domain": "odeko.com"
+  },
+  {
+    "name": "Whatnot",
+    "domain": "whatnot.com"
+  },
+  {
+    "name": "Pardes Biosciences",
+    "domain": "pardesbio.com"
+  },
+  {
+    "name": "Zepto",
+    "domain": "zeptonow.com"
+  }
+]
