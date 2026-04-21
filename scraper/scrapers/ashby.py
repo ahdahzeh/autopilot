@@ -64,8 +64,22 @@ async def _fetch_one(company: TargetCompany, client: httpx.AsyncClient) -> list[
         location = j.get("locationName") or ""
         secondary = j.get("secondaryLocations") or []
         if secondary:
-            extra = ", ".join([s.get("locationName", "") for s in secondary if s.get("locationName")])
-            if extra:
+            # Ashby uses "location" key in secondaryLocations, not "locationName".
+            # Fall back through address fields when the location string is absent.
+            parts: list[str] = []
+            for s in secondary:
+                loc = s.get("location") or s.get("locationName") or ""
+                if not loc:
+                    addr = (s.get("address") or {}).get("postalAddress") or {}
+                    city = addr.get("addressLocality") or ""
+                    region = addr.get("addressRegion") or ""
+                    country = addr.get("addressCountry") or ""
+                    if city:
+                        loc = f"{city}, {region}" if region else f"{city}, {country}" if country else city
+                if loc:
+                    parts.append(loc)
+            if parts:
+                extra = "; ".join(parts)
                 location = f"{location}; {extra}" if location else extra
 
         description = strip_html(j.get("descriptionHtml") or j.get("descriptionPlain") or "")
