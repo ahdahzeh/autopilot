@@ -192,6 +192,7 @@ export async function POST(req: Request) {
               model,
               prompt,
               schema,
+              mode: "tool", // force tool-call format; output_config rejects min/max on integers
               maxOutputTokens,
               abortSignal: clientAbort,
             });

@@ -10,7 +10,7 @@
 import { z } from "zod";
 
 export const matchSchema = z.object({
-  score: z.number().int().describe("Match score from 0 to 100"),
+  score: z.number().describe("Match score from 0 to 100, integer"),
   headline: z.string().describe("One-sentence summary of the match"),
   strengths: z.array(z.string()).describe("3 to 5 key strengths that make this a good fit"),
   gaps: z.array(z.string()).describe("1 to 3 gaps or risks for this application"),
@@ -29,7 +29,7 @@ export const keywordsSchema = z.object({
       }),
     )
     .describe("8 to 20 keywords from the job description"),
-  coverage_score: z.number().int().describe("Coverage score from 0 to 100"),
+  coverage_score: z.number().describe("Coverage score from 0 to 100, integer"),
   summary: z.string().describe("One-sentence summary of keyword coverage"),
 });
 export type KeywordsOutput = z.infer<typeof keywordsSchema>;
