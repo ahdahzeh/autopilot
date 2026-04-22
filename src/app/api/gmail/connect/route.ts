@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/calendar.readonly",
 ].join(" ");
 
 export async function GET(request: NextRequest) {

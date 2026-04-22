@@ -686,15 +686,22 @@ export default function SettingsPage() {
                   <span className="text-xl">📬</span>
                   <div>
                     <p className="text-sm font-semibold">Gmail Connected</p>
-                    <p className="text-[10px] text-muted">Pipeline updates automatically from your inbox</p>
+                    <p className="text-[10px] text-muted">Pipeline updates automatically from your inbox + calendar</p>
                   </div>
                 </div>
                 <span className="text-[10px] text-accent-green font-medium mono">Active</span>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <button onClick={syncGmail} disabled={syncing} className="cb-btn cb-btn--solid">
                   {syncing ? "Syncing" : "Sync now"}
                 </button>
+                <a
+                  href="/api/gmail/connect?origin=settings"
+                  className="cb-btn text-[10px]"
+                  title="Re-authorize to grant calendar read access for interview detection"
+                >
+                  Reconnect Google
+                </a>
                 {syncResult && (
                   <span
                     className="mono text-[10px] uppercase tracking-widest"
@@ -704,6 +711,9 @@ export default function SettingsPage() {
                   </span>
                 )}
               </div>
+              <p className="text-[10px] text-muted">
+                If interviews aren&apos;t showing up, click <strong>Reconnect Google</strong> to grant calendar access.
+              </p>
             </div>
           ) : (
             <div className="space-y-2">
