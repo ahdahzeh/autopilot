@@ -78,6 +78,8 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
         daily_job_limit: remaining,
         resume_text: user.resume_text || "",
         companies,
+        priority_industries: user.priority_industries ?? [],
+        priority_keywords: user.priority_keywords ?? [],
       }),
     });
     const data = await res.json();

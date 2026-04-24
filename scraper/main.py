@@ -13,6 +13,7 @@ from models import ScrapeRequest
 from scrapers import linkedin, builtin, hiringcafe, greenhouse, lever, ashby
 from scrapers.dedup import deduplicate, normalize_company, normalize_title
 from scorer import score_job, is_title_relevant
+from haiku_scorer import rescore_with_haiku
 
 load_dotenv()
 
@@ -63,6 +64,31 @@ def get_supabase():
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         raise HTTPException(500, "Supabase credentials not configured")
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+
+# Probe once per cold start whether the Haiku-score columns exist yet. Until
+# migration 016 ships we must NOT send score_reasoning/matched_skills/concerns
+# in the insert payload or PostgREST rejects the whole row with 42703. Cached
+# so we only pay one round-trip per Railway instance.
+_haiku_columns_checked = False
+_haiku_columns_available = False
+
+
+def haiku_columns_available(supabase) -> bool:
+    global _haiku_columns_checked, _haiku_columns_available
+    if _haiku_columns_checked:
+        return _haiku_columns_available
+    try:
+        supabase.table("jobs").select("score_reasoning", count=None, head=True).limit(1).execute()
+        _haiku_columns_available = True
+        logger.info("Haiku columns detected — semantic scoring fields will be persisted")
+    except Exception as e:
+        # 42703 = column does not exist. Anything else we also treat as "skip
+        # the new fields" so a transient lookup error doesn't corrupt inserts.
+        _haiku_columns_available = False
+        logger.warning(f"Haiku columns unavailable ({e}) — dropping those fields from insert")
+    _haiku_columns_checked = True
+    return _haiku_columns_available
 
 
 @app.get("/health")
@@ -200,6 +226,36 @@ async def scrape(req: ScrapeRequest):
     # Enforce daily limit
     unique_jobs = unique_jobs[:req.daily_job_limit]
 
+    # Score pass 1 — cheap heuristic. We need a score on every job so we can
+    # (a) rank candidates for the Haiku rescore and (b) fall back cleanly when
+    # Haiku is unavailable or skips a row.
+    heuristic_scores: dict[str, int] = {}
+    for job in unique_jobs:
+        heuristic_scores[job.id] = score_job(job, req.resume_text, req.target_titles)
+
+    # Score pass 2 — Haiku semantic rescore on the top HAIKU_BATCH_SIZE by
+    # heuristic. Returns richer data (0-100 score, reasoning, matched_skills,
+    # concerns). Anything not Haiku-scored keeps the heuristic number. If
+    # ANTHROPIC_API_KEY is unset or the batch fails, this is a no-op and we
+    # ship heuristic-only scores.
+    HAIKU_BATCH_SIZE = int(os.getenv("HAIKU_BATCH_SIZE", "20"))
+    top_candidates = sorted(unique_jobs, key=lambda j: heuristic_scores.get(j.id, 0), reverse=True)[:HAIKU_BATCH_SIZE]
+    haiku_by_id: dict[str, dict] = {}
+    if top_candidates and req.resume_text:
+        try:
+            haiku_results = await rescore_with_haiku(
+                top_candidates,
+                req.resume_text,
+                req.target_titles,
+                req.priority_industries,
+                req.priority_keywords,
+            )
+            for r in haiku_results:
+                haiku_by_id[r["id"]] = r
+            logger.info(f"Haiku rescored {len(haiku_results)}/{len(top_candidates)} top candidates")
+        except Exception as e:
+            logger.warning(f"Haiku rescore failed entirely, falling back to heuristic: {e}")
+
     # Insert into Supabase
     inserted = 0
     today = datetime.now().strftime("%Y-%m-%d")
@@ -208,12 +264,27 @@ async def scrape(req: ScrapeRequest):
     for job in unique_jobs:
         try:
             dedup_key = f"{normalize_company(job.company)}|{normalize_title(job.title)}|{job.source}"
-            match_score = score_job(job, req.resume_text, req.target_titles)
+            haiku = haiku_by_id.get(job.id)
+            if haiku:
+                # Haiku score is 0-100; UI expects 0-10 in match_score. Round to
+                # nearest so a 78 lands at 8 (and stays above min_match_score
+                # filters the user has set against the legacy 0-10 scale).
+                match_score = round(haiku["score"] / 10)
+                reasoning = haiku["reasoning"]
+                matched_skills = haiku["matched_skills"]
+                concerns = haiku["concerns"]
+            else:
+                match_score = heuristic_scores.get(job.id, 0)
+                reasoning = ""
+                matched_skills = []
+                concerns = []
+
             if match_score < req.min_match_score:
                 skipped_low_score += 1
                 continue
+
             priority = "High" if match_score >= 8 else "Medium" if match_score >= 5 else "Low"
-            supabase.table("jobs").insert({
+            row = {
                 "user_id": req.user_id,
                 "company": job.company,
                 "role": job.title,
@@ -227,7 +298,12 @@ async def scrape(req: ScrapeRequest):
                 "date_found": today,
                 "dedup_hash": dedup_key,
                 "description": job.description or "",
-            }).execute()
+            }
+            if haiku_columns_available(supabase):
+                row["score_reasoning"] = reasoning
+                row["matched_skills"] = matched_skills
+                row["concerns"] = concerns
+            supabase.table("jobs").insert(row).execute()
             inserted += 1
         except Exception as e:
             logger.error(f"Insert failed for {job.title} @ {job.company}: {e}")

@@ -116,6 +116,9 @@ function KanbanCard({
           <div className="min-w-0">
             <p className="text-xs font-semibold truncate">{job.company || job.name}</p>
             <p className="text-[10px] text-muted truncate">{job.role}</p>
+            {job.scoreReasoning && (
+              <p className="italic text-[11px] text-muted mt-0.5 truncate">{job.scoreReasoning}</p>
+            )}
           </div>
         </div>
         {matchPct && (

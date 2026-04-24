@@ -164,6 +164,9 @@ function ActionCard({
             )}
           </div>
           <p className="text-[10px] text-muted truncate mt-0.5">{item.role}</p>
+          {item.scoreReasoning && (
+            <p className="italic text-[11px] text-muted mt-0.5 truncate">{item.scoreReasoning}</p>
+          )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
           {item.actionType === "apply" && item.applyLink && (

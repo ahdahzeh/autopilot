@@ -299,6 +299,38 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
           </button>
         </div>
 
+        {/* Why this fits — Haiku scorer output */}
+        {(job.scoreReasoning || job.matchedSkills.length > 0 || job.concerns.length > 0) && (
+          <div className="px-4 sm:px-5 py-3 border-b border-border bg-bg2">
+            <p className="text-[10px] uppercase tracking-widest text-muted font-medium mb-2">Why this fits</p>
+            {job.scoreReasoning && (
+              <div className="border border-border rounded-lg bg-white px-3 py-2 mb-2">
+                <p className="text-xs leading-relaxed">{job.scoreReasoning}</p>
+              </div>
+            )}
+            {(job.matchedSkills.length > 0 || job.concerns.length > 0) && (
+              <div className="flex flex-wrap gap-1.5">
+                {job.matchedSkills.map((skill, i) => (
+                  <span
+                    key={`skill-${i}`}
+                    className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-light text-accent-green border border-accent-green/20"
+                  >
+                    {skill}
+                  </span>
+                ))}
+                {job.concerns.map((concern, i) => (
+                  <span
+                    key={`concern-${i}`}
+                    className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-light text-orange border border-orange/20"
+                  >
+                    {concern}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex gap-1 px-2 sm:px-4 border-b border-border overflow-x-auto">
           {TABS.map((t) => (

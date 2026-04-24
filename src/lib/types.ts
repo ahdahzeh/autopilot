@@ -13,6 +13,9 @@ export type Job = {
   matchScore: number | null;
   tailorScore: number | null;
   tailorReasoning: string;
+  scoreReasoning: string;
+  matchedSkills: string[];
+  concerns: string[];
   salaryRange: string;
   dateFound: string | null;
   dateApplied: string | null;

@@ -23,6 +23,9 @@ class JobListing(BaseModel):
     date_scraped: datetime = Field(default_factory=datetime.now)
     priority: str = "Medium"
     status: str = "New"
+    score_reasoning: str = ""
+    matched_skills: list[str] = Field(default_factory=list)
+    concerns: list[str] = Field(default_factory=list)
 
     def generate_id(self) -> str:
         raw = f"{self.company.lower().strip()}|{self.title.lower().strip()}|{self.source}"
@@ -60,3 +63,7 @@ class ScrapeRequest(BaseModel):
     daily_job_limit: int = 20
     resume_text: str = ""
     companies: list[TargetCompany] = []
+    # Fed into the Haiku rescorer so it weighs industry/keyword fit on top of
+    # plain resume-vs-JD overlap. Optional — Vercel populates from profile.
+    priority_industries: list[str] = []
+    priority_keywords: list[str] = []
