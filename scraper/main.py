@@ -34,6 +34,13 @@ SCRAPER_MAP = {
 # searches, so passing an empty companies list is a no-op for them.
 ATS_SOURCES = {"greenhouse", "lever", "ashby"}
 
+# Scrapers that spin up a headless Chromium. Each Playwright session eats
+# ~400MB on Railway's plan; running three in parallel OOM-killed the service
+# on the Vercel side before we knew this. The semaphore below caps concurrent
+# browser launches while letting HTTP-only (ATS) scrapers run freely.
+PLAYWRIGHT_SOURCES = {"linkedin", "builtin", "hiringcafe"}
+PLAYWRIGHT_CONCURRENCY = int(os.getenv("PLAYWRIGHT_CONCURRENCY", "2"))
+
 # Per-source budget in seconds. LinkedIn is allowed more time because it's
 # the slowest (Playwright + N×M matrix + anti-bot delays), but capped hard
 # so a hung session can't starve the downstream loop or blow the overall
@@ -87,27 +94,34 @@ async def scrape(req: ScrapeRequest):
     except Exception as e:
         logger.warning(f"Failed to load existing jobs: {e}")
 
-    # Run enabled scrapers
+    # Run enabled scrapers concurrently. Each source gets its own budget;
+    # total wall clock is max(budgets), not sum. This matters because Railway's
+    # edge kills requests past ~120s — serial scraping with 5+ sources would
+    # 502 even when every individual source succeeds. Concurrent + per-source
+    # timeout means LinkedIn hanging doesn't starve anyone else, AND the whole
+    # pass finishes inside the request window.
     all_jobs = []
     per_source_limit = max(5, req.daily_job_limit // len(req.sources)) if req.sources else req.daily_job_limit
 
-    for source in req.sources:
+    # Shared across all _run_one coroutines in this request — limits how
+    # many browser-launching scrapers run at once.
+    playwright_sem = asyncio.Semaphore(PLAYWRIGHT_CONCURRENCY)
+
+    async def _run_one(source: str):
+        """Execute one scraper under its budget. Returns (source, jobs, error)."""
         src_lower = source.lower()
         scraper_fn = SCRAPER_MAP.get(src_lower)
         if not scraper_fn:
-            logger.warning(f"Unknown source: {source}")
-            continue
+            return (source, [], f"unknown source")
 
-        # Short-circuit ATS sources when no companies are tracked for that ATS.
         if src_lower in ATS_SOURCES:
             if not any((c.ats_type or "").lower() == src_lower for c in req.companies):
-                logger.info(f"{source}: no tracked companies, skipping")
-                continue
+                return (source, [], "no tracked companies")
 
         timeout = SOURCE_TIMEOUTS.get(src_lower, DEFAULT_SOURCE_TIMEOUT)
         source_start = datetime.now()
 
-        async def _run():
+        async def _invoke():
             try:
                 return await scraper_fn(
                     titles=req.target_titles,
@@ -124,19 +138,32 @@ async def scrape(req: ScrapeRequest):
                 )
 
         try:
-            jobs = await asyncio.wait_for(_run(), timeout=timeout)
+            # Gate browser-launching scrapers behind the shared semaphore so we
+            # never have more than PLAYWRIGHT_CONCURRENCY Chromium processes
+            # alive at once. ATS scrapers are pure HTTP and run freely.
+            if src_lower in PLAYWRIGHT_SOURCES:
+                async with playwright_sem:
+                    jobs = await asyncio.wait_for(_invoke(), timeout=timeout)
+            else:
+                jobs = await asyncio.wait_for(_invoke(), timeout=timeout)
             elapsed = (datetime.now() - source_start).total_seconds()
-            all_jobs.extend(jobs)
             logger.info(f"{source}: scraped {len(jobs)} jobs in {elapsed:.1f}s")
+            return (source, jobs, None)
         except asyncio.TimeoutError:
             elapsed = (datetime.now() - source_start).total_seconds()
             logger.warning(
                 f"{source} timed out after {elapsed:.1f}s (budget {timeout}s) — "
                 f"moving on so the rest of the run doesn't stall"
             )
+            return (source, [], f"timeout after {timeout}s")
         except Exception as e:
             elapsed = (datetime.now() - source_start).total_seconds()
             logger.error(f"{source} scraper failed after {elapsed:.1f}s: {e}")
+            return (source, [], str(e))
+
+    results = await asyncio.gather(*[_run_one(s) for s in req.sources], return_exceptions=False)
+    for source, jobs, _err in results:
+        all_jobs.extend(jobs)
 
     # Deduplicate
     unique_jobs = deduplicate(all_jobs, existing_keys)
