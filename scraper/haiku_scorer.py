@@ -27,7 +27,7 @@ from models import JobListing
 
 
 MODEL = "claude-haiku-4-5-20251001"
-MAX_CONCURRENCY = 10
+MAX_CONCURRENCY = 5
 MAX_RETRIES = 2
 RETRY_SLEEP_SECONDS = 2.0
 

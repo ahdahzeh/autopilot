@@ -65,14 +65,20 @@ def _priority_from_score(score: int) -> str:
 
 
 def _load_profiles(supabase, user_id: str | None) -> list[dict[str, Any]]:
-    """Pull profiles scoped to one user or all users with a resume."""
+    """Pull profiles scoped to one user or all users with a resume.
+
+    The profiles table keys on `id` (matches auth.users.id), so we alias it to
+    `user_id` for the rest of the script's convenience.
+    """
     query = supabase.table("profiles").select(
-        "user_id, resume_text, target_titles, priority_industries, priority_keywords"
+        "id, resume_text, target_titles, priority_industries, priority_keywords, onboarded"
     )
     if user_id:
-        query = query.eq("user_id", user_id)
+        query = query.eq("id", user_id)
+    else:
+        query = query.eq("onboarded", True)
     result = query.execute()
-    profiles = result.data or []
+    profiles = [{**p, "user_id": p["id"]} for p in (result.data or [])]
 
     # Keep only profiles with at least *some* resume text — otherwise Haiku has
     # nothing to compare against and scores collapse.
@@ -83,18 +89,23 @@ def _load_profiles(supabase, user_id: str | None) -> list[dict[str, Any]]:
     return usable
 
 
-def _load_jobs_for_user(supabase, user_id: str) -> list[dict[str, Any]]:
+def _load_jobs_for_user(
+    supabase, user_id: str, only_missing: bool = False
+) -> list[dict[str, Any]]:
     """Pull every job row for one user. Sorted by existing match_score desc so
     top heuristic jobs get rescored first — useful if the caller kills the run
-    mid-way.
+    mid-way. If only_missing=True, skip rows that already have a Haiku reasoning
+    so we can cheaply finish a partial backfill after rate-limit failures.
     """
-    result = (
+    query = (
         supabase.table("jobs")
-        .select("id, role, company, description, source, location, match_score")
+        .select("id, role, company, description, source, location, match_score, score_reasoning")
         .eq("user_id", user_id)
         .order("match_score", desc=True)
-        .execute()
     )
+    if only_missing:
+        query = query.or_("score_reasoning.is.null,score_reasoning.eq.")
+    result = query.execute()
     return result.data or []
 
 
@@ -117,6 +128,7 @@ def _row_to_job_listing(row: dict[str, Any]) -> JobListing:
 async def _process_user(
     supabase,
     profile: dict[str, Any],
+    only_missing: bool = False,
 ) -> tuple[int, int, float]:
     """Rescore one user's jobs. Returns (jobs_scored, jobs_total, score_sum)."""
     user_id = profile["user_id"]
@@ -125,7 +137,7 @@ async def _process_user(
     priority_industries = profile.get("priority_industries", []) or []
     priority_keywords = profile.get("priority_keywords", []) or []
 
-    rows = _load_jobs_for_user(supabase, user_id)
+    rows = _load_jobs_for_user(supabase, user_id, only_missing=only_missing)
     if not rows:
         logger.info(f"user={user_id}: no jobs to rescore")
         return (0, 0, 0.0)
@@ -185,7 +197,7 @@ async def _process_user(
     return (scored, len(rows), float(score_sum))
 
 
-async def run(user_id: str | None) -> None:
+async def run(user_id: str | None, only_missing: bool = False) -> None:
     supabase = _get_supabase()
 
     if not os.getenv("ANTHROPIC_API_KEY"):
@@ -208,7 +220,9 @@ async def run(user_id: str | None) -> None:
     # another's for Haiku rate limits. Within each user, rescore_with_haiku
     # parallelises the 20-wide batch internally.
     for profile in profiles:
-        scored, job_count, score_sum = await _process_user(supabase, profile)
+        scored, job_count, score_sum = await _process_user(
+            supabase, profile, only_missing=only_missing
+        )
         total_users += 1
         total_scored += scored
         total_jobs += job_count
@@ -241,9 +255,14 @@ def main() -> None:
         default=None,
         help="Scope to a single user uuid. Omit to run across all onboarded users.",
     )
+    parser.add_argument(
+        "--only-missing",
+        action="store_true",
+        help="Only rescore rows that have no score_reasoning yet (cheap top-off after rate-limit failures).",
+    )
     args = parser.parse_args()
 
-    asyncio.run(run(args.user_id))
+    asyncio.run(run(args.user_id, only_missing=args.only_missing))
 
 
 if __name__ == "__main__":
