@@ -39,7 +39,20 @@ export default function OnboardingPage() {
   const [titles, setTitles] = useState("");
   const [locations, setLocations] = useState("");
   const [salaryFloor, setSalaryFloor] = useState(0);
-  const [sources, setSources] = useState<string[]>(["linkedin", "builtin"]);
+  // Include all 8 scraper sources by default so users get maximum job yield
+  // out of the box. ATS integrations (greenhouse/lever/ashby) draw from a
+  // shared community-seeded company pool, so users benefit without
+  // configuring tracked companies themselves. Prune in Settings if needed.
+  const [sources, setSources] = useState<string[]>([
+    "linkedin",
+    "builtin",
+    "hiringcafe",
+    "bandana",
+    "welcometothejungle",
+    "greenhouse",
+    "lever",
+    "ashby",
+  ]);
   const [dailyLimit, setDailyLimit] = useState(20);
   const [excludedCompanies, setExcludedCompanies] = useState("");
   const [resumeUploaded, setResumeUploaded] = useState(false);

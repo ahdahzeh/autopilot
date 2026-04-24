@@ -44,6 +44,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Belt-and-suspenders: even if someone else somehow gets profile.is_admin=true,
+  // the Admin button only surfaces for this hardcoded allowlist.
+  const [isAdminAllowlisted, setIsAdminAllowlisted] = useState(false);
   const [gmailConnected, setGmailConnected] = useState(false);
   const [resumeLength, setResumeLength] = useState(0);
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
@@ -58,6 +61,12 @@ export default function SettingsPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState("");
   const [scrapeStarting, setScrapeStarting] = useState(false);
+
+  // Pipeline cleanup — threshold in days, preview count, clearing state
+  const [cleanupDays, setCleanupDays] = useState(8);
+  const [cleanupPreview, setCleanupPreview] = useState<number | null>(null);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState("");
 
   // Profile fields
   const [displayName, setDisplayName] = useState("");
@@ -100,6 +109,11 @@ export default function SettingsPage() {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+
+      // Hardcoded email allowlist — keep in sync with ADMIN_EMAILS in
+      // server-side admin routes if you add more gates there.
+      const ADMIN_EMAILS = new Set(["adaze.oviawe@gmail.com"]);
+      setIsAdminAllowlisted(ADMIN_EMAILS.has((user.email || "").toLowerCase()));
 
       const { data: profile } = await supabase
         .from("profiles")
@@ -251,6 +265,51 @@ export default function SettingsPage() {
     }
   }
 
+  // Fetch the preview count whenever the threshold slider changes.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/jobs/bulk-delete?days=${cleanupDays}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setCleanupPreview(typeof data.count === "number" ? data.count : null);
+      } catch {
+        if (!cancelled) setCleanupPreview(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [cleanupDays]);
+
+  async function clearOldJobs() {
+    if (cleanupPreview === 0) return;
+    const ok = confirm(
+      `Permanently delete ${cleanupPreview ?? "?"} job(s) older than ${cleanupDays} days? This cannot be undone.`,
+    );
+    if (!ok) return;
+
+    setCleanupLoading(true);
+    setCleanupResult("");
+    try {
+      const res = await fetch("/api/jobs/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ olderThanDays: cleanupDays }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCleanupResult(`Failed: ${data.error || res.statusText}`);
+      } else {
+        setCleanupResult(`Deleted ${data.deleted} job(s).`);
+        setCleanupPreview(0);
+      }
+    } catch (err) {
+      setCleanupResult(`Failed: ${String(err)}`);
+    } finally {
+      setCleanupLoading(false);
+    }
+  }
+
   async function syncGmail() {
     setSyncing(true);
     setSyncResult("");
@@ -335,9 +394,19 @@ export default function SettingsPage() {
               <div className="cb-brand__sub">Settings</div>
             </div>
           </div>
-          <button onClick={() => router.push("/")} className="cb-btn">
-            ← Back
-          </button>
+          <div className="flex items-center gap-2">
+            {isAdmin && isAdminAllowlisted && (
+              <a href="/admin" className="cb-btn" title="Admin dashboard">
+                <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 2L3 7v6c0 5 3.5 9 9 11 5.5-2 9-6 9-11V7l-9-5z" />
+                </svg>
+                Admin
+              </a>
+            )}
+            <button onClick={() => router.push("/")} className="cb-btn">
+              ← Back
+            </button>
+          </div>
         </div>
 
         {/* Profile */}
@@ -566,6 +635,61 @@ export default function SettingsPage() {
           </button>
           {saved && <span className="mono text-[10px] uppercase tracking-widest" style={{ color: "var(--success)" }}>Saved</span>}
         </div>
+
+        {/* Pipeline cleanup */}
+        <Section title="Clear Old Jobs">
+          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+            <p className="text-[10px] text-muted">
+              Permanently remove stale jobs from your pipeline. Tailorings, bullets, and any
+              Applied / Interview status attached to those jobs go with them.
+            </p>
+
+            <Field
+              label="Older than"
+              hint="Applies to the job's original posting date"
+            >
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={3}
+                  max={60}
+                  step={1}
+                  value={cleanupDays}
+                  onChange={(e) => setCleanupDays(Number(e.target.value))}
+                  className="flex-1"
+                />
+                <span className="mono text-sm w-16 text-right tabular-nums">
+                  {cleanupDays} day{cleanupDays === 1 ? "" : "s"}
+                </span>
+              </div>
+            </Field>
+
+            <div className="flex items-center justify-between text-[10px] mono uppercase tracking-widest">
+              <span className="text-muted">Will delete</span>
+              <span className="font-bold tabular-nums">
+                {cleanupPreview === null ? "—" : `${cleanupPreview} job${cleanupPreview === 1 ? "" : "s"}`}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={clearOldJobs}
+                disabled={cleanupLoading || !cleanupPreview}
+                className="cb-btn cb-btn--danger"
+              >
+                {cleanupLoading ? "Deleting" : "Delete now"}
+              </button>
+              {cleanupResult && (
+                <span
+                  className="mono text-[10px] uppercase tracking-widest"
+                  style={{ color: cleanupResult.startsWith("Failed") ? "var(--danger)" : "var(--success)" }}
+                >
+                  {cleanupResult}
+                </span>
+              )}
+            </div>
+          </div>
+        </Section>
 
         {/* Invite Codes (admin only) */}
         {isAdmin && (

@@ -1,6 +1,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { syncUserGmail } from "@/lib/gmail-sync";
 import { scrapeForUser } from "@/lib/scrape";
+import { processOnboardingReminders, processEngagementEmails } from "@/lib/email-campaigns";
 import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -31,11 +32,23 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   const { action, userId } = body as { action?: string; userId?: string };
 
+  const svc = createServiceClient();
+
+  // Batch email campaign actions — no per-user target, they sweep all
+  // eligible users using the same logic the daily cron runs.
+  if (action === "send_onboarding_reminders") {
+    const result = await processOnboardingReminders();
+    return Response.json(result);
+  }
+
+  if (action === "send_engagement_emails") {
+    const result = await processEngagementEmails();
+    return Response.json(result);
+  }
+
   if (!userId) {
     return Response.json({ error: "userId required" }, { status: 400 });
   }
-
-  const svc = createServiceClient();
 
   if (action === "sync_gmail") {
     const result = await syncUserGmail(svc, userId);

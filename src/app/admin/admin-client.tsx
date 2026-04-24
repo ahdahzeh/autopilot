@@ -69,6 +69,38 @@ export default function AdminClient({
   const [syncResults, setSyncResults] = useState<Record<string, string>>({});
   const [scraping, setScraping] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [campaignRunning, setCampaignRunning] = useState<"onboarding" | "engagement" | null>(null);
+  const [campaignResult, setCampaignResult] = useState<string>("");
+
+  async function runCampaign(kind: "onboarding" | "engagement") {
+    if (campaignRunning) return;
+    const action = kind === "onboarding" ? "send_onboarding_reminders" : "send_engagement_emails";
+    setCampaignRunning(kind);
+    setCampaignResult("");
+    try {
+      const res = await fetch("/api/admin/actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setCampaignResult(`Error: ${data.error}`);
+      } else {
+        const label = kind === "onboarding" ? "Onboarding" : "Engagement";
+        const errs = Array.isArray(data.errors) && data.errors.length > 0
+          ? ` · ${data.errors.length} error${data.errors.length === 1 ? "" : "s"}`
+          : "";
+        setCampaignResult(
+          `${label}: ${data.sent ?? 0} sent, ${data.skipped ?? 0} skipped, ${data.eligible ?? 0} eligible${errs}`,
+        );
+      }
+    } catch (err) {
+      setCampaignResult(`Failed: ${String(err)}`);
+    } finally {
+      setCampaignRunning(null);
+    }
+  }
 
   const totalJobs = Object.values(pipeline).reduce((s, n) => s + n, 0);
 
@@ -190,6 +222,39 @@ export default function AdminClient({
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        {/* Email campaigns */}
+        <div className="mb-8">
+          <SectionTitle>Email Campaigns</SectionTitle>
+          <div className="px-4 py-4 border border-border rounded-xl bg-card">
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                type="button"
+                disabled={campaignRunning !== null}
+                onClick={() => runCampaign("onboarding")}
+                className="cb-btn cb-btn--solid"
+              >
+                {campaignRunning === "onboarding" ? "Sending…" : "Send onboarding reminders"}
+              </button>
+              <button
+                type="button"
+                disabled={campaignRunning !== null}
+                onClick={() => runCampaign("engagement")}
+                className="cb-btn"
+              >
+                {campaignRunning === "engagement" ? "Sending…" : "Send engagement emails"}
+              </button>
+              {campaignResult && (
+                <span className="mono text-[10px] uppercase tracking-widest text-muted">
+                  {campaignResult}
+                </span>
+              )}
+            </div>
+            <p className="text-[10px] text-muted mt-3">
+              Onboarding reminders go to users who never finished setup (day 1 / 3 / 7 cadence, max 3 per user). Engagement emails go to active users on a ~3–7 day rolling cadence. Both pass auto-runs daily at 13:00 UTC — these buttons trigger them on demand.
+            </p>
           </div>
         </div>
 
