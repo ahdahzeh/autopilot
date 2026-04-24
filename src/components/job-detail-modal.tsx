@@ -3,7 +3,31 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import type { Job } from "@/lib/types";
+import type { Job, DismissReason } from "@/lib/types";
+import { createClient } from "@/lib/supabase/client";
+import { showToast } from "@/components/toast";
+
+type FeedbackType =
+  | "wrong_seniority"
+  | "wrong_industry"
+  | "wrong_location"
+  | "spam"
+  | "not_a_fit";
+
+const FEEDBACK_OPTIONS: { value: FeedbackType; label: string }[] = [
+  { value: "wrong_seniority", label: "Wrong seniority" },
+  { value: "wrong_industry", label: "Wrong industry" },
+  { value: "wrong_location", label: "Wrong location" },
+  { value: "spam", label: "Looks like spam" },
+  { value: "not_a_fit", label: "Just not for me" },
+];
+
+// Map feedback type → the existing DismissReason vocabulary so we can reuse
+// /api/jobs/[id]/dismiss (which updates jobs.outcome='dismissed' + status='Dismissed').
+function feedbackToDismissReason(fb: FeedbackType): DismissReason {
+  if (fb === "spam") return "scam";
+  return "not_interested";
+}
 
 type Tab = "overview" | "match" | "bullets" | "cover" | "strategy" | "prep";
 
@@ -69,7 +93,12 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
   const [prep, setPrep] = useState<BlockState<PrepData>>(initialBlock<PrepData>());
 
   const abortRef = useRef<AbortController | null>(null);
+  const autoCoverAbortRef = useRef<AbortController | null>(null);
+  const autoCoverFiredRef = useRef<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [autoCoverDrafting, setAutoCoverDrafting] = useState(false);
 
   // Only render the portal after mount so SSR doesn't try to reach for
   // document.body. Also lock body scroll while open.
@@ -85,6 +114,7 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      autoCoverAbortRef.current?.abort();
     };
   }, []);
 
@@ -101,6 +131,163 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Auto-draft the cover letter in the background when the modal opens, as
+  // long as we have a JD and haven't already drafted one. Only fires the
+  // cover block to preserve the user's 40/day rate limit — other tabs stay
+  // on-demand. Guarded by a ref so Strict Mode's double-effect (and any job
+  // id shuffle) doesn't double-fire.
+  useEffect(() => {
+    if (!job.description || job.description.trim().length < 50) return;
+    if (cover.status !== "idle") return;
+    if (autoCoverFiredRef.current === job.id) return;
+    autoCoverFiredRef.current = job.id;
+
+    const ctrl = new AbortController();
+    autoCoverAbortRef.current = ctrl;
+    setAutoCoverDrafting(true);
+    setCover({ status: "running", data: null, error: null });
+
+    (async () => {
+      try {
+        const res = await fetch("/api/tailor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: ctrl.signal,
+          body: JSON.stringify({
+            jobDescription: job.description,
+            role: job.role,
+            company: job.company || job.name,
+            jobId: job.id,
+            blocks: ["cover"],
+          }),
+        });
+        if (!res.ok || !res.body) {
+          setCover({ status: "error", data: null, error: "Auto-draft failed." });
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const messages = buffer.split("\n\n");
+          buffer = messages.pop() ?? "";
+          for (const raw of messages) {
+            if (!raw.trim() || raw.trimStart().startsWith(":")) continue;
+            const lines = raw.split("\n");
+            let event = "message";
+            let dataLine = "";
+            for (const line of lines) {
+              if (line.startsWith("event:")) event = line.slice(6).trim();
+              else if (line.startsWith("data:")) dataLine += line.slice(5).trim();
+            }
+            if (!dataLine) continue;
+            let payload: any;
+            try { payload = JSON.parse(dataLine); } catch { continue; }
+            if (payload?.block !== "cover") continue;
+            if (event === "done") setCover({ status: "done", data: payload.data as CoverData, error: null });
+            if (event === "error") setCover({ status: "error", data: null, error: payload.error || "Failed" });
+          }
+        }
+      } catch (err: any) {
+        if (err?.name === "AbortError") return;
+        setCover((s) => s.status === "running"
+          ? { status: "error", data: null, error: "Auto-draft failed." }
+          : s);
+      } finally {
+        setAutoCoverDrafting(false);
+      }
+    })();
+
+    return () => {
+      ctrl.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.id]);
+
+  async function submitFeedback(type: FeedbackType) {
+    if (feedbackSubmitting) return;
+    setFeedbackSubmitting(true);
+    try {
+      const supabase = createClient();
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (userId) {
+        await supabase.from("job_feedback").insert({
+          user_id: userId,
+          job_id: job.id,
+          feedback_type: type,
+          company: job.company || job.name || null,
+          role: job.role || null,
+        });
+      }
+      // Mirror the dismiss flow so the jobs row gets outcome='dismissed' +
+      // status='Dismissed' via the same server handler the dashboard uses.
+      await fetch(`/api/jobs/${job.id}/dismiss`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: feedbackToDismissReason(type) }),
+      }).catch(() => {});
+    } catch (err) {
+      console.error("[feedback] submit failed", err);
+    } finally {
+      setFeedbackSubmitting(false);
+      setFeedbackOpen(false);
+      showToast({
+        id: `feedback-${job.id}-${Date.now()}`,
+        message: "Got it — we'll avoid similar roles on your next scrape.",
+        onUndo: () => {},
+      });
+      onClose();
+    }
+  }
+
+  async function copyApplicationBundle() {
+    const coverText = cover.status === "done" && cover.data
+      ? cover.data.paragraphs.join("\n\n")
+      : "— Cover letter not generated yet —";
+
+    let bulletsText: string;
+    if (bullets.status === "done" && bullets.data && bullets.data.bullets.length > 0) {
+      bulletsText = bullets.data.bullets
+        .slice(0, 3)
+        .map((b) => `• ${b.rewritten}`)
+        .join("\n");
+    } else {
+      bulletsText = "— Tailored bullets not generated yet —";
+    }
+
+    const bundle =
+`[Cover Letter]
+${coverText}
+
+[Top 3 Tailored Bullets]
+${bulletsText}
+
+[Quick Facts]
+Role: ${job.role || "-"}
+Company: ${job.company || job.name || "-"}
+Apply: ${job.applyLink || "-"}`;
+
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(bundle);
+      showToast({
+        id: `copy-${job.id}-${Date.now()}`,
+        message: "Copied — paste into the ATS form.",
+        onUndo: () => {},
+      });
+    } catch {
+      showToast({
+        id: `copy-err-${job.id}-${Date.now()}`,
+        message: "Couldn't copy — clipboard blocked by this browser.",
+        onUndo: () => {},
+      });
+    }
+  }
 
   const setBlockStarting = (block: Block) => {
     const update = { status: "running" as const, data: null, error: null };
@@ -130,6 +317,10 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
 
   async function generate() {
     if (jobDescription.trim().length < 50) return;
+    // Cancel any in-flight auto-cover so its late "done" event can't clobber
+    // the fresh run the user just kicked off.
+    autoCoverAbortRef.current?.abort();
+    setAutoCoverDrafting(false);
     setRunning(true);
     setGeneralError(null);
     // Optimistically set every block to "running" the moment the user clicks.
@@ -259,11 +450,11 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
     strategy.status !== "idle" ||
     prep.status !== "idle";
 
-  const TABS: { id: Tab; label: string; status?: BlockState<unknown>["status"] }[] = [
+  const TABS: { id: Tab; label: string; status?: BlockState<unknown>["status"]; subtle?: string }[] = [
     { id: "overview", label: "Overview" },
     { id: "match", label: "Match", status: match.status },
     { id: "bullets", label: "Bullets", status: bullets.status },
-    { id: "cover", label: "Cover", status: cover.status },
+    { id: "cover", label: "Cover", status: cover.status, subtle: autoCoverDrafting ? "Drafting cover letter…" : undefined },
     { id: "strategy", label: "Strategy", status: strategy.status },
     { id: "prep", label: "Interview", status: prep.status },
   ];
@@ -290,13 +481,48 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
               {job.source && <span>· {job.source}</span>}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-muted hover:text-foreground text-2xl leading-none shrink-0"
-            aria-label="Close"
-          >
-            ×
-          </button>
+          <div className="flex items-start gap-2 shrink-0">
+            <div className="relative">
+              <button
+                onClick={() => setFeedbackOpen((v) => !v)}
+                disabled={feedbackSubmitting}
+                className="px-2 py-1 rounded-lg text-[11px] font-medium bg-orange-light text-orange border border-orange/20 hover:bg-orange/10 transition disabled:opacity-50"
+                aria-label="Report not a fit"
+              >
+                Not a fit
+              </button>
+              {feedbackOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-[60]"
+                    onClick={() => setFeedbackOpen(false)}
+                  />
+                  <div className="absolute right-0 top-full mt-1 bg-white border border-border rounded-lg shadow-lg py-1 z-[70] min-w-[180px]">
+                    <p className="px-3 py-1 text-[9px] uppercase tracking-widest text-muted font-medium">
+                      Why not?
+                    </p>
+                    {FEEDBACK_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => submitFeedback(opt.value)}
+                        disabled={feedbackSubmitting}
+                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-neutral-50 transition-colors disabled:opacity-50"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            <button
+              onClick={onClose}
+              className="text-muted hover:text-foreground text-2xl leading-none"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
         </div>
 
         {/* Why this fits — Haiku scorer output */}
@@ -361,6 +587,15 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
           ))}
         </div>
 
+        {autoCoverDrafting && (
+          <div className="px-4 sm:px-5 py-1.5 border-b border-border bg-bg2">
+            <p className="text-[10px] text-muted mono uppercase tracking-widest">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent-purple animate-pulse mr-1.5 align-middle" />
+              Drafting cover letter…
+            </p>
+          </div>
+        )}
+
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-5">
           <AnimatePresence mode="wait">
@@ -389,6 +624,26 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
               {tab === "prep" && <PrepTab state={prep} />}
             </motion.div>
           </AnimatePresence>
+        </div>
+
+        {/* Footer — ATS bundle + apply shortcut. Stays compact on mobile. */}
+        <div className="flex items-center gap-2 p-3 border-t border-border bg-bg2">
+          <button
+            onClick={copyApplicationBundle}
+            className="flex-1 py-2 text-[11px] font-medium rounded-lg border border-border bg-white hover:bg-background transition truncate"
+          >
+            Copy application bundle
+          </button>
+          {job.applyLink && (
+            <a
+              href={job.applyLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="py-2 px-3 text-[11px] font-semibold rounded-lg bg-accent-purple text-white hover:opacity-90 transition shrink-0"
+            >
+              Apply ↗
+            </a>
+          )}
         </div>
       </motion.div>
     </div>

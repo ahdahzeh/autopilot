@@ -4,6 +4,8 @@ import { generateText, type LanguageModel } from "ai";
 import { createClient } from "@/lib/supabase/server";
 import { captureError } from "@/lib/sentry";
 import { MODELS } from "@/lib/tailor-prompts";
+import { expandTitles } from "@/lib/title-expansion";
+import { auditResumeDepth } from "@/lib/resume-audit";
 import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -82,6 +84,65 @@ export async function POST(request: NextRequest) {
       }
     });
   }
+
+  // Independently of summarization, kick off the two Haiku calls that
+  // power matching: title expansion (seniority-aware variants) and the
+  // resume depth audit (score + issues surfaced in settings). Both write
+  // back to profiles and must never throw out of the after() block.
+  after(async () => {
+    try {
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("target_titles, years_experience, anthropic_api_key")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const targetTitles = Array.isArray(prof?.target_titles)
+        ? (prof!.target_titles as string[])
+        : [];
+      const priorYoE =
+        typeof prof?.years_experience === "number" ? prof!.years_experience : null;
+      const userKey =
+        (prof?.anthropic_api_key as string | null | undefined)?.trim() || undefined;
+
+      const [audit, expansion] = await Promise.all([
+        auditResumeDepth({
+          resumeText,
+          anthropicApiKey: userKey,
+        }),
+        expandTitles({
+          targetTitles,
+          yearsExperience: priorYoE,
+          resumeText,
+          anthropicApiKey: userKey,
+        }),
+      ]);
+
+      const update: Record<string, unknown> = {
+        resume_depth_score: audit.score,
+        resume_depth_issues: audit.issues,
+        expanded_titles: expansion.expandedTitles,
+      };
+      // Only overwrite years_experience when we actually derived a value.
+      if (expansion.yearsExperience != null) {
+        update.years_experience = expansion.yearsExperience;
+      }
+
+      const { error: updateErr } = await supabase
+        .from("profiles")
+        .update(update)
+        .eq("id", user.id);
+      if (updateErr) {
+        captureError(updateErr, {
+          route: "resume",
+          stage: "post_save_update",
+          userId: user.id,
+        });
+      }
+    } catch (e) {
+      captureError(e, { route: "resume", stage: "post_save_enrich", userId: user.id });
+    }
+  });
 
   return Response.json({
     ok: true,

@@ -1,6 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { scrapeForUser } from "@/lib/scrape";
-import { processOnboardingReminders, processEngagementEmails } from "@/lib/email-campaigns";
+import { processOnboardingReminders, processEngagementEmails, processDailyDigest } from "@/lib/email-campaigns";
 
 // Allow up to 5 minutes per invocation — the sequential for-loop was killing
 // the cron mid-pass before most users got scraped. We now parallelize, but
@@ -57,12 +57,14 @@ export async function GET(request: Request) {
   // profile so we never double-send.
   const onboarding = await processOnboardingReminders().catch((err) => ({ error: String(err) }));
   const engagement = await processEngagementEmails().catch((err) => ({ error: String(err) }));
+  const digest = await processDailyDigest().catch((err) => ({ error: String(err) }));
 
   return Response.json({
     processed: users.length,
     results,
     onboarding,
     engagement,
+    digest,
     timestamp: new Date().toISOString(),
   });
 }

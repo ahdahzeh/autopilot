@@ -14,6 +14,7 @@ from scrapers import linkedin, builtin, hiringcafe, greenhouse, lever, ashby
 from scrapers.dedup import deduplicate, normalize_company, normalize_title
 from scorer import score_job, is_title_relevant
 from haiku_scorer import rescore_with_haiku
+from source_stats import write_source_stats
 
 load_dotenv()
 
@@ -107,6 +108,41 @@ async def scrape(req: ScrapeRequest):
     if not req.resume_text:
         logger.warning(f"User {req.user_id} has no resume — match scores will be 0")
 
+    # Union target_titles with upstream-expanded variants. Dedup is case-
+    # insensitive but preserves the first-seen casing so logs stay readable.
+    # target_titles always wins tie-breaks (appears first).
+    seen_titles: set[str] = set()
+    effective_titles: list[str] = []
+    for t in list(req.target_titles) + list(req.expanded_titles or []):
+        key = (t or "").strip().lower()
+        if not key or key in seen_titles:
+            continue
+        seen_titles.add(key)
+        effective_titles.append(t)
+    if req.expanded_titles:
+        logger.info(
+            f"Titles: {len(req.target_titles)} target + {len(req.expanded_titles)} expanded "
+            f"-> {len(effective_titles)} unique"
+        )
+
+    # Fold user's not-a-fit companies into the excluded-companies filter. Case-
+    # insensitive dedup; values from either list survive in their original form
+    # so the substring match in JobListing.is_excluded_company keeps working.
+    seen_excl: set[str] = set()
+    effective_excluded_companies: list[str] = []
+    for c in list(req.excluded_companies) + list(req.negative_companies or []):
+        key = (c or "").strip().lower()
+        if not key or key in seen_excl:
+            continue
+        seen_excl.add(key)
+        effective_excluded_companies.append(c)
+    if req.negative_companies:
+        logger.info(
+            f"Excluded companies: {len(req.excluded_companies)} base + "
+            f"{len(req.negative_companies)} negative-feedback -> "
+            f"{len(effective_excluded_companies)} unique"
+        )
+
     supabase = get_supabase()
 
     # Get existing jobs for this user to deduplicate against
@@ -150,7 +186,7 @@ async def scrape(req: ScrapeRequest):
         async def _invoke():
             try:
                 return await scraper_fn(
-                    titles=req.target_titles,
+                    titles=effective_titles,
                     locations=req.target_locations,
                     limit=per_source_limit,
                     companies=req.companies if src_lower in ATS_SOURCES else None,
@@ -158,7 +194,7 @@ async def scrape(req: ScrapeRequest):
             except TypeError:
                 # Legacy scrapers without the companies kwarg
                 return await scraper_fn(
-                    titles=req.target_titles,
+                    titles=effective_titles,
                     locations=req.target_locations,
                     limit=per_source_limit,
                 )
@@ -188,8 +224,19 @@ async def scrape(req: ScrapeRequest):
             return (source, [], str(e))
 
     results = await asyncio.gather(*[_run_one(s) for s in req.sources], return_exceptions=False)
-    for source, jobs, _err in results:
+
+    # Per-source stats accumulator. Keyed by source (raw case from the request)
+    # so we preserve whatever the caller sent. Filled in across dedup + insert.
+    source_stats: dict[str, dict] = {}
+    for source, jobs, err in results:
         all_jobs.extend(jobs)
+        source_stats[source] = {
+            "source": source,
+            "jobs_returned": len(jobs),
+            "jobs_after_dedup": 0,
+            "jobs_inserted": 0,
+            "error": err,
+        }
 
     # Deduplicate
     unique_jobs = deduplicate(all_jobs, existing_keys)
@@ -200,10 +247,13 @@ async def scrape(req: ScrapeRequest):
         unique_jobs = [j for j in unique_jobs if not _below_salary_floor(j, req.salary_floor)]
         logger.info(f"Salary filter: {before} -> {len(unique_jobs)}")
 
-    # Filter excluded companies
-    if req.excluded_companies:
+    # Filter excluded companies (union of user-managed excluded + feedback
+    # negative_companies).
+    if effective_excluded_companies:
         before = len(unique_jobs)
-        unique_jobs = [j for j in unique_jobs if not j.is_excluded_company(req.excluded_companies)]
+        unique_jobs = [
+            j for j in unique_jobs if not j.is_excluded_company(effective_excluded_companies)
+        ]
         logger.info(f"Excluded companies filter: {before} -> {len(unique_jobs)}")
 
     # Filter excluded titles (user-managed substring deny-list — catches
@@ -216,12 +266,21 @@ async def scrape(req: ScrapeRequest):
 
     # Role-family relevance filter. Search APIs return loose keyword matches
     # ("Product Designer" → "Product Manager" leak), so drop anything whose
-    # title doesn't share a family with the user's target_titles.
+    # title doesn't share a family with the user's target_titles. We match
+    # against the user's canonical target_titles (NOT the expanded union) so
+    # upstream query expansion can't sneak in off-role families.
     if req.target_titles:
         before = len(unique_jobs)
         unique_jobs = [j for j in unique_jobs if is_title_relevant(j.title, req.target_titles)]
         dropped = before - len(unique_jobs)
         logger.info(f"Title relevance filter: {before} -> {len(unique_jobs)} ({dropped} off-role dropped)")
+
+    # Fill in jobs_after_dedup per source using the post-filter set so the
+    # stat reflects "jobs that survived all the way to the scoring stage."
+    for j in unique_jobs:
+        s = source_stats.get(j.source)
+        if s is not None:
+            s["jobs_after_dedup"] += 1
 
     # Enforce daily limit
     unique_jobs = unique_jobs[:req.daily_job_limit]
@@ -231,7 +290,7 @@ async def scrape(req: ScrapeRequest):
     # Haiku is unavailable or skips a row.
     heuristic_scores: dict[str, int] = {}
     for job in unique_jobs:
-        heuristic_scores[job.id] = score_job(job, req.resume_text, req.target_titles)
+        heuristic_scores[job.id] = score_job(job, req.resume_text, effective_titles)
 
     # Score pass 2 — Haiku semantic rescore on the top HAIKU_BATCH_SIZE by
     # heuristic. Returns richer data (0-100 score, reasoning, matched_skills,
@@ -246,9 +305,10 @@ async def scrape(req: ScrapeRequest):
             haiku_results = await rescore_with_haiku(
                 top_candidates,
                 req.resume_text,
-                req.target_titles,
+                effective_titles,
                 req.priority_industries,
                 req.priority_keywords,
+                req.negative_companies,
             )
             for r in haiku_results:
                 haiku_by_id[r["id"]] = r
@@ -305,6 +365,9 @@ async def scrape(req: ScrapeRequest):
                 row["concerns"] = concerns
             supabase.table("jobs").insert(row).execute()
             inserted += 1
+            s = source_stats.get(job.source)
+            if s is not None:
+                s["jobs_inserted"] += 1
         except Exception as e:
             logger.error(f"Insert failed for {job.title} @ {job.company}: {e}")
 
@@ -312,6 +375,15 @@ async def scrape(req: ScrapeRequest):
         f"Done: {inserted}/{len(unique_jobs)} jobs inserted for user {req.user_id} "
         f"(skipped {skipped_low_score} below min_match_score={req.min_match_score})"
     )
+
+    # Best-effort per-source stats write. Fire-and-forget semantics: a failure
+    # here MUST NOT affect the /scrape response, so write_source_stats swallows
+    # its own exceptions and source_stats_available() degrades gracefully when
+    # the table is absent.
+    try:
+        write_source_stats(supabase, req.user_id, list(source_stats.values()))
+    except Exception as e:
+        logger.warning(f"source_stats outer write failed: {e}")
 
     return {
         "jobs_scraped": len(all_jobs),

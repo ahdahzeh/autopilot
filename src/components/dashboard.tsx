@@ -8,6 +8,8 @@ import { JobTable } from "./job-table";
 import { KanbanBoard } from "./kanban-board";
 import { ToastContainer, showToast } from "./toast";
 import { AddJobModal } from "./add-job-modal";
+import { JobDetailModal } from "./job-detail-modal";
+import { ProgressWidget } from "./progress-widget";
 import { ThemeToggle } from "./theme-toggle";
 import { SupportButton } from "./support-modal";
 import { createClient } from "@/lib/supabase/client";
@@ -39,6 +41,15 @@ export function Dashboard() {
   const [direction, setDirection] = useState(0);
   const [showAddJob, setShowAddJob] = useState(false);
   const [welcoming, setWelcoming] = useState(false);
+  const [detailJob, setDetailJob] = useState<Job | null>(null);
+
+  const handleOpenJob = useCallback((jobId: string) => {
+    setData((current) => {
+      const job = current?.jobs.find((j) => j.id === jobId) ?? null;
+      if (job) setDetailJob(job);
+      return current;
+    });
+  }, []);
 
   const viewOrder = ["action", "pipeline", "kanban"] as const;
   const switchView = (next: typeof view) => {
@@ -316,6 +327,10 @@ export function Dashboard() {
         </div>
       </div>
 
+      <div className="mb-6">
+        <ProgressWidget onOpenJob={handleOpenJob} />
+      </div>
+
       <AnimatePresence mode="wait">
         <motion.div
           key={view}
@@ -394,6 +409,7 @@ export function Dashboard() {
       </footer>
 
       <AddJobModal open={showAddJob} onClose={() => setShowAddJob(false)} onAdded={fetchData} />
+      {detailJob && <JobDetailModal job={detailJob} onClose={() => setDetailJob(null)} />}
       <ToastContainer />
     </div>
   );

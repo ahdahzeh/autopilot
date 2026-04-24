@@ -62,6 +62,20 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
     name: c.name ?? "",
   }));
 
+  // Negative-feedback companies: last 90 days of "not a fit" signals. Unioned
+  // into excluded_companies on the scraper side so we both hard-filter exact
+  // matches AND nudge Haiku to down-weight similar companies.
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const { data: feedbackRows } = await supabase
+    .from("job_feedback")
+    .select("company")
+    .eq("user_id", user.id)
+    .gte("created_at", ninetyDaysAgo);
+
+  const negativeCompanies = Array.from(
+    new Set((feedbackRows ?? []).map((r) => (r.company ?? "").trim()).filter(Boolean)),
+  );
+
   try {
     const res = await fetch(`${scraperUrl}/scrape`, {
       method: "POST",
@@ -80,6 +94,10 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
         companies,
         priority_industries: user.priority_industries ?? [],
         priority_keywords: user.priority_keywords ?? [],
+        // Seniority-aware title variants generated at resume-save time.
+        expanded_titles: user.expanded_titles ?? [],
+        // "Not a fit" signals from the last 90 days.
+        negative_companies: negativeCompanies,
       }),
     });
     const data = await res.json();

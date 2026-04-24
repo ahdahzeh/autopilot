@@ -96,6 +96,7 @@ def _build_user_prompt(
     target_titles: list[str],
     priority_industries: list[str],
     priority_keywords: list[str],
+    negative_companies: list[str] | None = None,
 ) -> str:
     """Assemble the per-job user prompt. Kept compact since we fire N of these per scrape."""
     description = (job.description or "").strip()
@@ -114,13 +115,24 @@ def _build_user_prompt(
     )
     target_titles_line = ", ".join(target_titles) if target_titles else "(none specified)"
 
+    # Optional negative-signal block. Included only when the user has flagged
+    # companies as not-a-fit via feedback, so Haiku can down-weight similar
+    # companies (not just exact matches — those are already filtered upstream).
+    negative_line = ""
+    if negative_companies:
+        negative_line = (
+            "\nNEGATIVE SIGNALS:\n"
+            f"User has marked these companies as not-a-fit: {', '.join(negative_companies)}\n"
+        )
+
     return (
         "CANDIDATE RESUME:\n"
         f"{resume or '(no resume text provided)'}\n\n"
         "CANDIDATE TARGETS:\n"
         f"- Desired titles: {target_titles_line}\n"
         f"- Priority industries: {priority_industries_line}\n"
-        f"- Priority keywords: {priority_keywords_line}\n\n"
+        f"- Priority keywords: {priority_keywords_line}\n"
+        f"{negative_line}\n"
         "JOB LISTING:\n"
         f"- Title: {job.title}\n"
         f"- Company: {job.company}\n"
@@ -138,10 +150,16 @@ async def _score_one(
     target_titles: list[str],
     priority_industries: list[str],
     priority_keywords: list[str],
+    negative_companies: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Score a single job. Returns None on unrecoverable failure (logged)."""
     user_prompt = _build_user_prompt(
-        job, resume_text, target_titles, priority_industries, priority_keywords
+        job,
+        resume_text,
+        target_titles,
+        priority_industries,
+        priority_keywords,
+        negative_companies,
     )
 
     for attempt in range(MAX_RETRIES + 1):
@@ -220,6 +238,7 @@ async def rescore_with_haiku(
     target_titles: list[str],
     priority_industries: list[str] | None = None,
     priority_keywords: list[str] | None = None,
+    negative_companies: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Re-score a batch of jobs with Haiku.
 
@@ -229,6 +248,9 @@ async def rescore_with_haiku(
         target_titles: Desired role titles.
         priority_industries: Industries the user prioritizes (optional).
         priority_keywords: Extra keywords the user prioritizes (optional).
+        negative_companies: Companies the user has marked not-a-fit. Fed to
+            Haiku as a negative signal so it down-weights similar companies
+            (optional).
 
     Returns:
         A list of dicts, one per successfully scored job:
@@ -252,6 +274,7 @@ async def rescore_with_haiku(
 
     priority_industries = priority_industries or []
     priority_keywords = priority_keywords or []
+    negative_companies = negative_companies or []
 
     client = AsyncAnthropic(api_key=api_key)
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
@@ -262,7 +285,14 @@ async def rescore_with_haiku(
 
     tasks = [
         _score_one(
-            client, sem, job, resume_text, target_titles, priority_industries, priority_keywords
+            client,
+            sem,
+            job,
+            resume_text,
+            target_titles,
+            priority_industries,
+            priority_keywords,
+            negative_companies,
         )
         for job in jobs
     ]

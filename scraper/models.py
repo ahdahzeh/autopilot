@@ -67,3 +67,11 @@ class ScrapeRequest(BaseModel):
     # plain resume-vs-JD overlap. Optional — Vercel populates from profile.
     priority_industries: list[str] = []
     priority_keywords: list[str] = []
+    # Title variants produced upstream (Vercel side) to widen the search net
+    # without polluting the user's canonical target_titles. Unioned with
+    # target_titles before being passed to scrapers.
+    expanded_titles: list[str] = []
+    # Companies the user has marked "not a fit" via feedback. Unioned into
+    # excluded_companies so the next scrape auto-suppresses them, and also
+    # passed to Haiku as a negative signal to down-weight similar companies.
+    negative_companies: list[str] = []

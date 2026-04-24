@@ -19,6 +19,15 @@ const DAILY_LIMITS = [10, 20, 30];
 
 type RoleFamily = "design" | "engineering" | "product" | "data" | "marketing" | "ops" | "other";
 
+type VerticalPack = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  icon: string;
+  ats_slugs: Array<{ ats_type: string; slug: string; name: string }>;
+};
+
 const ROLE_FAMILIES: { id: RoleFamily; label: string; titlePlaceholder: string; locationPlaceholder: string }[] = [
   { id: "design", label: "Design", titlePlaceholder: "Product Designer, Senior Product Designer, UX Designer", locationPlaceholder: "San Francisco, New York, Remote" },
   { id: "engineering", label: "Engineering", titlePlaceholder: "Software Engineer, Senior Frontend Engineer, Staff Engineer", locationPlaceholder: "San Francisco, New York, Remote" },
@@ -64,6 +73,10 @@ export default function OnboardingPage() {
   const [resumeUploaded, setResumeUploaded] = useState(false);
   const [resumeLength, setResumeLength] = useState(0);
   const [gmailConnected, setGmailConnected] = useState(false);
+  const [priorityIndustries, setPriorityIndustries] = useState("");
+  const [priorityKeywords, setPriorityKeywords] = useState("");
+  const [selectedVerticalIds, setSelectedVerticalIds] = useState<string[]>([]);
+  const [verticalPacks, setVerticalPacks] = useState<VerticalPack[]>([]);
 
   const router = useRouter();
   const supabase = createClient();
@@ -82,6 +95,8 @@ export default function OnboardingPage() {
     const targetTitles = titles.split(",").map((t) => t.trim()).filter(Boolean);
     const targetLocations = locations.split(",").map((l) => l.trim()).filter(Boolean);
     const excluded = excludedCompanies.split(",").map((c) => c.trim()).filter(Boolean);
+    const priorityInds = priorityIndustries.split(",").map((s) => s.trim()).filter(Boolean);
+    const priorityKws = priorityKeywords.split(",").map((s) => s.trim()).filter(Boolean);
 
     // Only write fields the user has actually filled in. Writing empty
     // arrays on an early-step save would clobber data from a previous
@@ -95,6 +110,8 @@ export default function OnboardingPage() {
     if (targetTitles.length > 0) update.target_titles = targetTitles;
     if (targetLocations.length > 0) update.target_locations = targetLocations;
     if (excluded.length > 0) update.excluded_companies = excluded;
+    if (priorityInds.length > 0) update.priority_industries = priorityInds;
+    if (priorityKws.length > 0) update.priority_keywords = priorityKws;
 
     try {
       await supabase.from("profiles").update(update).eq("id", user.id);
@@ -146,6 +163,12 @@ export default function OnboardingPage() {
             setExcludedCompanies(profile.excluded_companies.join(", "));
           }
           if (profile.role_family) setRoleFamily(profile.role_family as RoleFamily);
+          if (profile.priority_industries?.length > 0) {
+            setPriorityIndustries(profile.priority_industries.join(", "));
+          }
+          if (profile.priority_keywords?.length > 0) {
+            setPriorityKeywords(profile.priority_keywords.join(", "));
+          }
 
           // Any persisted field counts as returning progress — including
           // invite-prefilled rows (target_titles) and mid-flow partial
@@ -171,6 +194,34 @@ export default function OnboardingPage() {
         if (profile?.gmail_connected) {
           setGmailConnected(true);
         }
+
+        // Load vertical packs (shared reference data). If this fails,
+        // the verticals step renders a "Loading…" placeholder and the
+        // user can still advance without selecting any.
+        try {
+          const { data: packs } = await supabase
+            .from("vertical_packs")
+            .select("*")
+            .eq("active", true)
+            .order("slug");
+          if (packs) setVerticalPacks(packs as VerticalPack[]);
+        } catch {
+          // Non-fatal — step remains passable.
+        }
+
+        // Rehydrate previously-selected verticals for returning users.
+        try {
+          const { data: pv } = await supabase
+            .from("profile_verticals")
+            .select("vertical_pack_id")
+            .eq("user_id", user.id);
+          if (pv && pv.length > 0) {
+            setSelectedVerticalIds(pv.map((row: { vertical_pack_id: string }) => row.vertical_pack_id));
+          }
+        } catch {
+          // Non-fatal.
+        }
+
         const params = new URLSearchParams(window.location.search);
         if (params.get("gmail") === "connected") {
           setGmailConnected(true);
@@ -199,6 +250,8 @@ export default function OnboardingPage() {
     const targetTitles = titles.split(",").map((t) => t.trim()).filter(Boolean);
     const targetLocations = locations.split(",").map((l) => l.trim()).filter(Boolean);
     const excluded = excludedCompanies.split(",").map((c) => c.trim()).filter(Boolean);
+    const priorityInds = priorityIndustries.split(",").map((s) => s.trim()).filter(Boolean);
+    const priorityKws = priorityKeywords.split(",").map((s) => s.trim()).filter(Boolean);
 
     // Refuse to overwrite with empty values — prevents the Gmail-OAuth return
     // race where the review step renders before loadProfile() repopulates form
@@ -219,9 +272,45 @@ export default function OnboardingPage() {
         daily_job_limit: dailyLimit,
         excluded_companies: excluded,
         role_family: roleFamily,
+        priority_industries: priorityInds,
+        priority_keywords: priorityKws,
         onboarded: true,
       })
       .eq("id", user.id);
+
+    // Persist vertical selections. Delete-then-insert keeps the set in
+    // sync with what's currently checked (a returning user who unchecks
+    // a pack should see it removed). Failures here are non-fatal — the
+    // main profile write already succeeded.
+    try {
+      await supabase.from("profile_verticals").delete().eq("user_id", user.id);
+      if (selectedVerticalIds.length > 0) {
+        await supabase.from("profile_verticals").insert(
+          selectedVerticalIds.map((vid) => ({ user_id: user.id, vertical_pack_id: vid })),
+        );
+
+        // Expand each selected pack into per-company target rows so the
+        // scraper picks them up. `on conflict do nothing` protects users
+        // who have already added one of these companies manually.
+        const selectedPacks = verticalPacks.filter((p) => selectedVerticalIds.includes(p.id));
+        const companyRows = selectedPacks.flatMap((pack) =>
+          (pack.ats_slugs || []).map((s) => ({
+            user_id: user.id,
+            ats_type: s.ats_type,
+            slug: s.slug,
+            name: s.name,
+            active: true,
+          })),
+        );
+        if (companyRows.length > 0) {
+          await supabase
+            .from("target_companies")
+            .upsert(companyRows, { onConflict: "user_id,ats_type,slug", ignoreDuplicates: true });
+        }
+      }
+    } catch {
+      // Non-fatal — user can manage verticals/companies from Settings.
+    }
 
     try {
       await fetch("/api/jobs/scrape", { method: "POST" });
@@ -239,6 +328,12 @@ export default function OnboardingPage() {
     );
   }
 
+  function toggleVertical(id: string) {
+    setSelectedVerticalIds((prev) =>
+      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]
+    );
+  }
+
   const steps = [
     // Step 0: Welcome
     <div key="welcome" className="text-center space-y-4">
@@ -250,7 +345,7 @@ export default function OnboardingPage() {
           ? "We saved what you already entered. Click through to review and finish setting up."
           : "Tell us what you're looking for and we'll find jobs for you every day. Takes about two minutes."}
       </p>
-      <p className="text-[10px] text-muted mono uppercase tracking-widest">9 quick steps</p>
+      <p className="text-[10px] text-muted mono uppercase tracking-widest">11 quick steps</p>
       {prefilled && !returningUser && (
         <p className="text-xs text-accent-purple">
           We pre-filled some preferences from your invite. Feel free to edit.
@@ -400,7 +495,82 @@ export default function OnboardingPage() {
       />
     </div>,
 
-    // Step 8: Resume (required)
+    // Step 8: Priorities (optional free-text boosters)
+    <div key="priorities" className="space-y-4">
+      <div>
+        <h2 className="text-sm font-bold">Any industries or keywords to prioritize?</h2>
+        <p className="text-[11px] text-muted mt-1">
+          Optional. These boost matches for roles in these spaces or using these terms. Leave blank if unsure.
+        </p>
+      </div>
+      <div className="space-y-3">
+        <div>
+          <label className="text-[10px] text-muted mono uppercase tracking-widest">Industries</label>
+          <textarea
+            value={priorityIndustries}
+            onChange={(e) => setPriorityIndustries(e.target.value)}
+            rows={2}
+            placeholder="Fintech, Consumer, Climate…"
+            className="w-full mt-1 px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] text-muted mono uppercase tracking-widest">Keywords</label>
+          <textarea
+            value={priorityKeywords}
+            onChange={(e) => setPriorityKeywords(e.target.value)}
+            rows={2}
+            placeholder="B2B SaaS, ML infra, design systems…"
+            className="w-full mt-1 px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
+          />
+        </div>
+      </div>
+    </div>,
+
+    // Step 9: Verticals (multi-select curated packs)
+    <div key="verticals" className="space-y-4">
+      <div>
+        <h2 className="text-sm font-bold">Track any verticals?</h2>
+        <p className="text-[11px] text-muted mt-1">
+          We'll auto-track the best-known companies in these verticals alongside the community pool.
+        </p>
+      </div>
+      {verticalPacks.length === 0 ? (
+        <p className="text-[11px] text-muted">Loading…</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          {verticalPacks.map((pack) => {
+            const selected = selectedVerticalIds.includes(pack.id);
+            const count = pack.ats_slugs?.length ?? 0;
+            return (
+              <button
+                key={pack.id}
+                type="button"
+                onClick={() => toggleVertical(pack.id)}
+                className={`text-left px-3 py-3 rounded-lg border transition-all ${
+                  selected
+                    ? "border-accent-purple bg-accent-purple/5"
+                    : "border-border hover:bg-card"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">{pack.icon}</span>
+                  <span className={`text-sm ${selected ? "font-semibold" : "font-medium text-foreground"}`}>
+                    {pack.name}
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted mt-1 line-clamp-2">{pack.description}</p>
+                <p className="text-[10px] text-muted mono uppercase tracking-widest mt-2">
+                  {count} {count === 1 ? "company" : "companies"}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>,
+
+    // Step 10: Resume (required)
     <div key="resume" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Upload your resume</h2>
@@ -419,7 +589,7 @@ export default function OnboardingPage() {
       )}
     </div>,
 
-    // Step 9: Gmail (OPTIONAL)
+    // Step 11: Gmail (OPTIONAL)
     <div key="gmail" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Connect Gmail (optional)</h2>
@@ -455,7 +625,7 @@ export default function OnboardingPage() {
       <p className="text-[10px] text-muted">We never send emails or store message content. Only subject lines are scanned to detect status changes.</p>
     </div>,
 
-    // Step 10: Review
+    // Step 12: Review
     <div key="review" className="space-y-4">
       <h2 className="text-sm font-bold">Review your setup</h2>
       <div className="bg-card border border-border rounded-xl p-4 space-y-3 text-xs">

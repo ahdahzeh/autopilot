@@ -17,10 +17,13 @@ import {
   renderOnboardingReminder,
   renderDigest,
   renderSpotlight,
+  renderDailyDigest,
   sendEmail,
   firstNameOf,
   type DigestJob,
+  type DailyDigestJob,
 } from "./emails";
+import { captureError } from "./sentry";
 
 type CampaignSummary = {
   eligible: number;
@@ -95,6 +98,114 @@ export async function processOnboardingReminders(): Promise<CampaignSummary> {
     await svc.from("profiles").update({
       onboarding_reminder_count: count + 1,
       onboarding_reminder_last_at: new Date().toISOString(),
+    }).eq("id", p.id);
+
+    summary.sent += 1;
+  }
+
+  return summary;
+}
+
+// ─── Daily digest (top 5 Haiku-scored matches from the last 24h) ────────────
+//
+// Runs alongside the other two campaigns. Targets onboarded users with an
+// active Gmail connection (gmail_connected=true) and who have at least 3
+// scored matches in the last 24h — a 1- or 2-job digest isn't worth an email.
+// Throttled to once per 20 hours via profiles.digest_email_last_at.
+
+const DIGEST_MIN_MATCHES = 3;
+const DIGEST_MIN_HOURS_BETWEEN_SENDS = 20;
+const DIGEST_WINDOW_HOURS = 24;
+
+export async function processDailyDigest(): Promise<CampaignSummary> {
+  const svc = createServiceClient();
+  const summary: CampaignSummary = { eligible: 0, sent: 0, skipped: 0, errors: [] };
+
+  // Onboarded + opted-in + Gmail connected only. Skip unverified users.
+  const { data: profiles, error } = await svc
+    .from("profiles")
+    .select("id, display_name, digest_email_last_at, emails_opted_out, unsubscribe_token, gmail_connected")
+    .eq("onboarded", true)
+    .eq("emails_opted_out", false)
+    .eq("gmail_connected", true);
+
+  if (error || !profiles) {
+    summary.errors.push(`fetch profiles: ${error?.message ?? "unknown"}`);
+    return summary;
+  }
+
+  const { data: authList } = await svc.auth.admin.listUsers();
+  const emailById: Record<string, string> = {};
+  for (const u of authList?.users ?? []) emailById[u.id] = (u.email || "").trim();
+
+  const now = Date.now();
+  const since = new Date(now - DIGEST_WINDOW_HOURS * 3600_000).toISOString();
+
+  for (const p of profiles) {
+    summary.eligible += 1;
+
+    // Throttle: <20h since last digest means skip.
+    if (p.digest_email_last_at) {
+      const hoursSince = (now - new Date(p.digest_email_last_at).getTime()) / 3600_000;
+      if (hoursSince < DIGEST_MIN_HOURS_BETWEEN_SENDS) { summary.skipped += 1; continue; }
+    }
+
+    const email = emailById[p.id];
+    if (!email) { summary.skipped += 1; continue; }
+    if (!p.unsubscribe_token) { summary.skipped += 1; continue; }
+
+    // Top 5 Haiku-scored jobs from the last 24h with a real apply link.
+    // score_reasoning must be non-null — we don't send "see these jobs"
+    // emails if we can't show why they fit.
+    const { data: jobs } = await svc
+      .from("jobs")
+      .select("id, title, company, match_score, score_reasoning, apply_link")
+      .eq("user_id", p.id)
+      .gte("created_at", since)
+      .not("score_reasoning", "is", null)
+      .order("match_score", { ascending: false, nullsFirst: false })
+      .limit(10); // fetch extra so filtering empty apply_link still yields 5
+
+    const eligibleJobs: DailyDigestJob[] = (jobs ?? [])
+      .filter((j) => typeof j.apply_link === "string" && j.apply_link.trim() !== "")
+      .filter((j) => typeof j.score_reasoning === "string" && j.score_reasoning.trim() !== "")
+      .slice(0, 5)
+      .map((j) => ({
+        id: j.id,
+        title: j.title ?? "Untitled",
+        company: j.company ?? "—",
+        match_score: j.match_score ?? null,
+        score_reasoning: j.score_reasoning as string,
+      }));
+
+    if (eligibleJobs.length < DIGEST_MIN_MATCHES) {
+      console.log(`[daily-digest] skip ${email}: only ${eligibleJobs.length} eligible match${eligibleJobs.length === 1 ? "" : "es"}`);
+      summary.skipped += 1;
+      continue;
+    }
+
+    const payload = renderDailyDigest({
+      to: email,
+      firstName: firstNameOf(p.display_name, email),
+      unsubscribeToken: p.unsubscribe_token,
+      jobs: eligibleJobs,
+    });
+
+    try {
+      const result = await sendEmail(payload);
+      if (!result.ok) {
+        captureError(new Error(`daily digest send failed: ${result.error ?? "unknown"}`), { email, userId: p.id });
+        summary.errors.push(`${email}: ${result.error ?? "send failed"}`);
+        continue;
+      }
+    } catch (err) {
+      captureError(err, { email, userId: p.id, scope: "daily-digest-send" });
+      summary.errors.push(`${email}: ${String(err)}`);
+      continue;
+    }
+
+    await svc.from("profiles").update({
+      digest_email_last_at: new Date().toISOString(),
     }).eq("id", p.id);
 
     summary.sent += 1;

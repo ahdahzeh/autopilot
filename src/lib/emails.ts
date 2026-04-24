@@ -216,6 +216,72 @@ export function renderDigest(input: DigestInput): EmailPayload {
   return { to: input.to, subject, html, text };
 }
 
+// ─── Daily digest (top 5 Haiku-scored matches from last 24h) ────────────────
+
+export type DailyDigestJob = {
+  id: string;
+  title: string;
+  company: string;
+  match_score: number | null;
+  score_reasoning: string;
+};
+
+export type DailyDigestInput = {
+  to: string;
+  firstName: string;
+  unsubscribeToken: string;
+  jobs: DailyDigestJob[];
+};
+
+function scorePill(score: number | null): string {
+  // Monospace score pill. Green >=80, orange 50-79, grey below.
+  if (score == null) {
+    return `<span style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#666;background:#f0f0f0;padding:3px 8px;border-radius:4px;letter-spacing:.02em;">—</span>`;
+  }
+  let bg = "#f0f0f0";
+  let fg = "#666";
+  if (score >= 80) { bg = "#d6f5e0"; fg = "#0a6b2e"; }
+  else if (score >= 50) { bg = "#ffe8cc"; fg = "#8a4a00"; }
+  return `<span style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:${fg};background:${bg};padding:3px 8px;border-radius:4px;letter-spacing:.02em;">${score}</span>`;
+}
+
+export function renderDailyDigest(input: DailyDigestInput): EmailPayload {
+  const name = input.firstName.trim() || "there";
+  const subject = "Your top 5 matches today";
+  const preview = "Handpicked matches from the last 24 hours.";
+
+  const jobsHtml = input.jobs.map((j) => {
+    const link = `${appUrl("/")}?job=${encodeURIComponent(j.id)}`;
+    return `<tr><td style="padding:16px 0;border-bottom:1px solid #eaeaea;">
+      <div style="font-size:15px;font-weight:700;color:#111;margin-bottom:4px;">${escapeHtml(j.title)}</div>
+      <div style="font-size:13px;color:#555;margin-bottom:8px;">${escapeHtml(j.company)} &nbsp; ${scorePill(j.match_score)}</div>
+      <div style="font-size:12px;font-style:italic;color:#888;line-height:1.5;margin-bottom:10px;">${escapeHtml(j.score_reasoning)}</div>
+      <a href="${link}" style="font-size:13px;color:#111;text-decoration:underline;font-weight:600;">View →</a>
+    </td></tr>`;
+  }).join("");
+
+  const html = wrapHtml({
+    previewText: preview,
+    unsubscribeToken: input.unsubscribeToken,
+    bodyHtml: `
+      <p style="font-size:18px;font-weight:600;margin:0 0 12px;color:#111;">Hey ${name},</p>
+      <p style="font-size:15px;line-height:1.6;margin:0 0 16px;color:#333;">Your top matches from the last 24 hours, ranked by fit.</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${jobsHtml}</table>
+      ${button("Open dashboard", appUrl("/"))}
+      <p style="font-size:13px;color:#888;margin:24px 0 0;">— Adaze</p>
+    `,
+  });
+
+  const jobsText = input.jobs.map((j) => {
+    const link = `${appUrl("/")}?job=${encodeURIComponent(j.id)}`;
+    const scoreText = j.match_score != null ? ` [${j.match_score}]` : "";
+    return `• ${j.title} @ ${j.company}${scoreText}\n  ${j.score_reasoning}\n  ${link}`;
+  }).join("\n\n");
+  const text = `Hey ${name},\n\nYour top matches from the last 24 hours:\n\n${jobsText}\n\nDashboard: ${appUrl("/")}\n\n— Adaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
+
+  return { to: input.to, subject, html, text };
+}
+
 // ─── Engagement: spotlight ──────────────────────────────────────────────────
 
 export type SpotlightInput = {
