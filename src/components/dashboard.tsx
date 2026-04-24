@@ -39,6 +39,25 @@ export function Dashboard() {
   const [direction, setDirection] = useState(0);
   const [showAddJob, setShowAddJob] = useState(false);
   const [welcoming, setWelcoming] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Surface /admin in the header for admin users so they don't have to
+  // type the URL. One tiny fetch; fails silently for non-admins.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("is_admin")
+        .eq("id", user.id)
+        .single();
+      if (!cancelled) setIsAdmin(Boolean(profile?.is_admin));
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const viewOrder = ["action", "pipeline", "kanban"] as const;
   const switchView = (next: typeof view) => {
@@ -305,6 +324,14 @@ export function Dashboard() {
             </svg>
             Refresh
           </button>
+          {isAdmin && (
+            <a href="/admin" className="cb-btn" title="Admin dashboard">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M12 2L3 7v6c0 5 3.5 9 9 11 5.5-2 9-6 9-11V7l-9-5z" />
+              </svg>
+              Admin
+            </a>
+          )}
           <a href="/settings" className="cb-btn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <circle cx="12" cy="12" r="3" />
@@ -390,6 +417,7 @@ export function Dashboard() {
           <a href="https://cerebral.ahdahzeh.com">Cerebral</a>
           <a href="https://ahdahzeh.com">Portfolio</a>
           <a href="/settings">Settings</a>
+          {isAdmin && <a href="/admin">Admin</a>}
         </div>
       </footer>
 

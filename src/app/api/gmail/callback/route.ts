@@ -65,18 +65,14 @@ export async function GET(request: NextRequest) {
     .from("profiles")
     .update({ gmail_connected: true })
     .eq("id", userId)
-    .select("onboarded, target_titles")
+    .select("onboarded")
     .single();
 
-  // If the user is already onboarded (or has titles filled in), skip the
-  // onboarding page entirely — sending them back there with an empty form
-  // was the root cause of the data-wipe bug where onboarding form state
-  // hadn't loaded yet and handleComplete wrote empty arrays to the DB.
-  const alreadySetUp =
-    profile?.onboarded ||
-    (Array.isArray(profile?.target_titles) && profile.target_titles.length > 0);
-
-  const redirectPath = alreadySetUp
+  // Route by onboarded status only: fully-onboarded users go to settings,
+  // mid-onboarding users return to /onboarding to finish. The onboarding
+  // page now saves form state before the OAuth redirect, so rehydration
+  // via loadProfile() brings them back to the exact state they left in.
+  const redirectPath = profile?.onboarded
     ? "/settings?gmail=connected"
     : origin === "onboarding"
     ? "/onboarding?gmail=connected"

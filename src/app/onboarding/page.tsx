@@ -32,6 +32,7 @@ export default function OnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [prefilled, setPrefilled] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
+  const [returningUser, setReturningUser] = useState(false);
 
   // Form state
   const [roleFamily, setRoleFamily] = useState<RoleFamily>("design");
@@ -47,6 +48,48 @@ export default function OnboardingPage() {
 
   const router = useRouter();
   const supabase = createClient();
+
+  // Persist partial onboarding state to the DB. Called on every Next and
+  // before the Gmail OAuth redirect. This protects users from losing form
+  // state during OAuth full-page redirects, tab closes, or browser crashes.
+  //
+  // Critical: never sets `onboarded: true` — that only happens in
+  // handleComplete. The partial save just preserves what the user has
+  // entered so loadProfile() can rehydrate them on return.
+  async function saveProgress() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const targetTitles = titles.split(",").map((t) => t.trim()).filter(Boolean);
+    const targetLocations = locations.split(",").map((l) => l.trim()).filter(Boolean);
+    const excluded = excludedCompanies.split(",").map((c) => c.trim()).filter(Boolean);
+
+    // Only write fields the user has actually filled in. Writing empty
+    // arrays on an early-step save would clobber data from a previous
+    // in-progress attempt.
+    const update: Record<string, unknown> = {
+      role_family: roleFamily,
+      salary_floor: salaryFloor,
+      sources,
+      daily_job_limit: dailyLimit,
+    };
+    if (targetTitles.length > 0) update.target_titles = targetTitles;
+    if (targetLocations.length > 0) update.target_locations = targetLocations;
+    if (excluded.length > 0) update.excluded_companies = excluded;
+
+    try {
+      await supabase.from("profiles").update(update).eq("id", user.id);
+    } catch {
+      // Non-fatal — if the save fails, the next Next will retry.
+    }
+  }
+
+  async function goNext() {
+    // Save in background; don't block navigation. If the network drops,
+    // the user still advances and will retry on the next step.
+    void saveProgress();
+    setStep((s) => s + 1);
+  }
 
   const currentFamily = useMemo(
     () => ROLE_FAMILIES.find((f) => f.id === roleFamily) ?? ROLE_FAMILIES[0],
@@ -65,15 +108,42 @@ export default function OnboardingPage() {
           .eq("id", user.id)
           .single();
 
-        if (profile && profile.target_titles?.length > 0) {
-          setTitles(profile.target_titles.join(", "));
-          setLocations(profile.target_locations?.join(", ") || "");
-          setSalaryFloor(profile.salary_floor || 0);
-          setSources(profile.sources || ["linkedin", "builtin"]);
-          setDailyLimit(profile.daily_job_limit || 20);
-          setExcludedCompanies(profile.excluded_companies?.join(", ") || "");
+        // Rehydrate form state from any previously-saved fields. We check
+        // each field independently so a returning user who filled out only
+        // roles (not locations) gets their roles back. This is what
+        // prevents the Gmail-OAuth data wipe — saveProgress() persists
+        // these fields before the redirect, and this restores them after.
+        if (profile) {
+          if (profile.target_titles?.length > 0) {
+            setTitles(profile.target_titles.join(", "));
+          }
+          if (profile.target_locations?.length > 0) {
+            setLocations(profile.target_locations.join(", "));
+          }
+          if (profile.salary_floor) setSalaryFloor(profile.salary_floor);
+          if (profile.sources?.length > 0) setSources(profile.sources);
+          if (profile.daily_job_limit) setDailyLimit(profile.daily_job_limit);
+          if (profile.excluded_companies?.length > 0) {
+            setExcludedCompanies(profile.excluded_companies.join(", "));
+          }
           if (profile.role_family) setRoleFamily(profile.role_family as RoleFamily);
-          setPrefilled(true);
+
+          // Any persisted field counts as returning progress — including
+          // invite-prefilled rows (target_titles) and mid-flow partial
+          // saves (role_family). The actual step jump to the review
+          // screen happens below when ?gmail=connected is present.
+          const hasAnyProgress =
+            profile.target_titles?.length > 0 ||
+            profile.target_locations?.length > 0 ||
+            profile.role_family;
+          if (hasAnyProgress) {
+            setPrefilled(true);
+            // Distinguish invite-prefilled (only target_titles) from a
+            // returning partial onboarder (has role_family too).
+            if (profile.role_family && !profile.onboarded) {
+              setReturningUser(true);
+            }
+          }
         }
         if (profile?.resume_text?.length > 0) {
           setResumeUploaded(true);
@@ -153,21 +223,25 @@ export default function OnboardingPage() {
   const steps = [
     // Step 0: Welcome
     <div key="welcome" className="text-center space-y-4">
-      <h2 className="text-lg font-bold">Let's set up your job search</h2>
+      <h2 className="text-lg font-bold">
+        {returningUser ? "Welcome back — let's finish up" : "Let's set up your job search"}
+      </h2>
       <p className="text-sm text-muted">
-        Tell us what you're looking for and we'll find jobs for you every day. Takes about two minutes.
+        {returningUser
+          ? "We saved what you already entered. Click through to review and finish setting up."
+          : "Tell us what you're looking for and we'll find jobs for you every day. Takes about two minutes."}
       </p>
       <p className="text-[10px] text-muted mono uppercase tracking-widest">9 quick steps</p>
-      {prefilled && (
+      {prefilled && !returningUser && (
         <p className="text-xs text-accent-purple">
           We pre-filled some preferences from your invite. Feel free to edit.
         </p>
       )}
       <button
-        onClick={() => setStep(1)}
+        onClick={goNext}
         className="px-6 py-2.5 text-sm font-semibold rounded-lg bg-foreground text-white hover:opacity-90 transition"
       >
-        Get Started
+        {returningUser ? "Pick up where I left off" : "Get Started"}
       </button>
     </div>,
 
@@ -340,16 +414,24 @@ export default function OnboardingPage() {
           <p className="text-sm font-semibold">Gmail connected</p>
         </div>
       ) : (
-        <a
-          href="/api/gmail/connect?origin=onboarding"
-          className="flex items-center gap-3 px-4 py-3 border border-accent-purple rounded-xl hover:bg-accent-purple/5 transition-colors w-full"
+        <button
+          type="button"
+          onClick={async () => {
+            // CRITICAL: save current form state before OAuth full-page
+            // redirect wipes all React state. This is the fix for the
+            // onboarding-data-loss bug where users lost their profile
+            // info and ended up marked as NOT ONBOARDED.
+            await saveProgress();
+            window.location.href = "/api/gmail/connect?origin=onboarding";
+          }}
+          className="flex items-center gap-3 px-4 py-3 border border-accent-purple rounded-xl hover:bg-accent-purple/5 transition-colors w-full text-left"
         >
           <span className="text-xl">📬</span>
           <div className="text-left">
             <p className="text-sm font-semibold">Connect Google Account</p>
             <p className="text-[10px] text-muted">Read-only access. OAuth secured by Google.</p>
           </div>
-        </a>
+        </button>
       )}
       <p className="text-[10px] text-muted">We never send emails or store message content. Only subject lines are scanned to detect status changes.</p>
     </div>,
@@ -422,7 +504,7 @@ export default function OnboardingPage() {
             </button>
             {!isLastStep && (
               <button
-                onClick={() => setStep(step + 1)}
+                onClick={goNext}
                 className="px-4 py-2 text-xs font-semibold rounded-lg bg-foreground text-white hover:opacity-90 transition disabled:opacity-40"
               >
                 Next
