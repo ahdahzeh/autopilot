@@ -62,8 +62,11 @@ export default function SettingsPage() {
   const [syncResult, setSyncResult] = useState("");
   const [scrapeStarting, setScrapeStarting] = useState(false);
 
-  // Pipeline cleanup — threshold in days, preview count, clearing state
+  // Pipeline cleanup — threshold in days, preview count, clearing state.
+  // includeAll=false (default) keeps Applied/Interview/Offer/Rejected so
+  // the user doesn't lose their application history when purging stale feeds.
   const [cleanupDays, setCleanupDays] = useState(8);
+  const [cleanupIncludeAll, setCleanupIncludeAll] = useState(false);
   const [cleanupPreview, setCleanupPreview] = useState<number | null>(null);
   const [cleanupLoading, setCleanupLoading] = useState(false);
   const [cleanupResult, setCleanupResult] = useState("");
@@ -265,12 +268,14 @@ export default function SettingsPage() {
     }
   }
 
-  // Fetch the preview count whenever the threshold slider changes.
+  // Fetch the preview count whenever the threshold or includeAll toggle changes.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/jobs/bulk-delete?days=${cleanupDays}`);
+        const params = new URLSearchParams({ days: String(cleanupDays) });
+        if (cleanupIncludeAll) params.set("includeAll", "1");
+        const res = await fetch(`/api/jobs/bulk-delete?${params.toString()}`);
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) setCleanupPreview(typeof data.count === "number" ? data.count : null);
@@ -279,12 +284,15 @@ export default function SettingsPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [cleanupDays]);
+  }, [cleanupDays, cleanupIncludeAll]);
 
   async function clearOldJobs() {
     if (cleanupPreview === 0) return;
+    const scope = cleanupIncludeAll
+      ? "including Applied / Interview / Rejected"
+      : "(only unacted-on New jobs — your application history is safe)";
     const ok = confirm(
-      `Permanently delete ${cleanupPreview ?? "?"} job(s) older than ${cleanupDays} days? This cannot be undone.`,
+      `Permanently delete ${cleanupPreview ?? "?"} job(s) older than ${cleanupDays} days ${scope}? This cannot be undone.`,
     );
     if (!ok) return;
 
@@ -294,7 +302,7 @@ export default function SettingsPage() {
       const res = await fetch("/api/jobs/bulk-delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ olderThanDays: cleanupDays }),
+        body: JSON.stringify({ olderThanDays: cleanupDays, includeAll: cleanupIncludeAll }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -640,8 +648,9 @@ export default function SettingsPage() {
         <Section title="Clear Old Jobs">
           <div className="bg-card border border-border rounded-xl p-4 space-y-3">
             <p className="text-[10px] text-muted">
-              Permanently remove stale jobs from your pipeline. Tailorings, bullets, and any
-              Applied / Interview status attached to those jobs go with them.
+              Purge stale jobs from your feed. By default we only drop unacted-on
+              <span className="mono"> New </span> jobs — your Applied / Interview / Rejected
+              history stays put.
             </p>
 
             <Field
@@ -663,6 +672,19 @@ export default function SettingsPage() {
                 </span>
               </div>
             </Field>
+
+            <label className="flex items-start gap-2 cursor-pointer py-1">
+              <input
+                type="checkbox"
+                checked={cleanupIncludeAll}
+                onChange={(e) => setCleanupIncludeAll(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span className="text-[10px] text-muted leading-snug">
+                Also delete Applied, Interview, Offer, and Rejected jobs. This wipes your
+                application history for anything that old.
+              </span>
+            </label>
 
             <div className="flex items-center justify-between text-[10px] mono uppercase tracking-widest">
               <span className="text-muted">Will delete</span>
