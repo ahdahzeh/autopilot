@@ -345,7 +345,7 @@ export default function OnboardingPage() {
           ? "We saved what you already entered. Click through to review and finish setting up."
           : "Tell us what you're looking for and we'll find jobs for you every day. Takes about two minutes."}
       </p>
-      <p className="text-[10px] text-muted mono uppercase tracking-widest">11 quick steps</p>
+      <p className="text-[10px] text-muted mono uppercase tracking-widest">9 quick steps</p>
       {prefilled && !returningUser && (
         <p className="text-xs text-accent-purple">
           We pre-filled some preferences from your invite. Feel free to edit.
@@ -383,56 +383,84 @@ export default function OnboardingPage() {
       </div>
     </div>,
 
-    // Step 2: Roles
-    <div key="roles" className="space-y-4">
+    // Step 2: Roles + Locations (merged — both are freeform textareas primed
+    // by the role-family placeholder, and users nearly always fill them in
+    // the same sitting).
+    <div key="targeting" className="space-y-4">
       <div>
-        <h2 className="text-sm font-bold">What roles are you looking for?</h2>
-        <p className="text-[10px] text-muted mt-1">Comma-separated. You can list 2 to 5 titles.</p>
+        <h2 className="text-sm font-bold">What roles, and where?</h2>
+        <p className="text-[10px] text-muted mt-1">Comma-separated. Include &ldquo;Remote&rdquo; if open to it.</p>
       </div>
-      <textarea
-        value={titles}
-        onChange={(e) => setTitles(e.target.value)}
-        rows={3}
-        placeholder={currentFamily.titlePlaceholder}
-        className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
-      />
-    </div>,
-
-    // Step 3: Locations
-    <div key="locations" className="space-y-4">
-      <div>
-        <h2 className="text-sm font-bold">Where do you want to work?</h2>
-        <p className="text-[10px] text-muted mt-1">Comma-separated. Include "Remote" if open to it.</p>
-      </div>
-      <textarea
-        value={locations}
-        onChange={(e) => setLocations(e.target.value)}
-        rows={3}
-        placeholder={currentFamily.locationPlaceholder}
-        className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
-      />
-    </div>,
-
-    // Step 4: Salary
-    <div key="salary" className="space-y-4">
-      <div>
-        <h2 className="text-sm font-bold">Minimum salary?</h2>
-        <p className="text-[10px] text-muted mt-1">We'll skip jobs below this. Set to 0 to see everything.</p>
-      </div>
-      <div className="flex items-center gap-3">
-        <span className="text-sm text-muted">$</span>
-        <input
-          type="number"
-          value={salaryFloor || ""}
-          onChange={(e) => setSalaryFloor(Number(e.target.value))}
-          placeholder="100000"
-          step={5000}
-          className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white mono focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
-        />
+      <div className="space-y-3">
+        <div>
+          <label className="text-[10px] text-muted mono uppercase tracking-widest">Target titles</label>
+          <textarea
+            value={titles}
+            onChange={(e) => setTitles(e.target.value)}
+            rows={2}
+            placeholder={currentFamily.titlePlaceholder}
+            className="w-full mt-1 px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] text-muted mono uppercase tracking-widest">Locations</label>
+          <textarea
+            value={locations}
+            onChange={(e) => setLocations(e.target.value)}
+            rows={2}
+            placeholder={currentFamily.locationPlaceholder}
+            className="w-full mt-1 px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
+          />
+        </div>
       </div>
     </div>,
 
-    // Step 5: Sources
+    // Step 3: Salary + Daily limit (merged — two short numeric preferences,
+    // unnatural to split across screens).
+    <div key="prefs" className="space-y-4">
+      <div>
+        <h2 className="text-sm font-bold">Pipeline preferences</h2>
+        <p className="text-[10px] text-muted mt-1">We&rsquo;ll skip jobs below the floor and cap the daily pipeline.</p>
+      </div>
+      <div className="space-y-3">
+        <div>
+          <label className="text-[10px] text-muted mono uppercase tracking-widest">Minimum salary</label>
+          <div className="flex items-center gap-3 mt-1">
+            <span className="text-sm text-muted">$</span>
+            <input
+              type="number"
+              value={salaryFloor || ""}
+              onChange={(e) => setSalaryFloor(Number(e.target.value))}
+              placeholder="100000"
+              step={5000}
+              className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white mono focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
+            />
+          </div>
+          <p className="text-[10px] text-muted mt-1">Set to 0 to see everything.</p>
+        </div>
+        <div>
+          <label className="text-[10px] text-muted mono uppercase tracking-widest">Jobs per day</label>
+          <div className="flex gap-2 mt-1">
+            {DAILY_LIMITS.map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setDailyLimit(n)}
+                className={`flex-1 py-2.5 text-sm font-semibold rounded-lg border transition-all mono ${
+                  dailyLimit === n
+                    ? "border-accent-purple bg-accent-purple/5 text-foreground"
+                    : "border-border hover:bg-card text-muted"
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>,
+
+    // Step 4: Sources
     <div key="sources" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Where should we look?</h2>
@@ -456,51 +484,13 @@ export default function OnboardingPage() {
       </div>
     </div>,
 
-    // Step 6: Daily limit
-    <div key="limit" className="space-y-4">
+    // Step 5: Focus areas (merged — priorities + verticals; both optional
+    // boosters that tune match scoring, so it makes sense to co-locate).
+    <div key="focus" className="space-y-4">
       <div>
-        <h2 className="text-sm font-bold">How many new jobs per day?</h2>
-        <p className="text-[10px] text-muted mt-1">We'll cap your daily pipeline at this number.</p>
-      </div>
-      <div className="flex gap-2">
-        {DAILY_LIMITS.map((n) => (
-          <button
-            key={n}
-            type="button"
-            onClick={() => setDailyLimit(n)}
-            className={`flex-1 py-3 text-sm font-semibold rounded-lg border transition-all mono ${
-              dailyLimit === n
-                ? "border-accent-purple bg-accent-purple/5 text-foreground"
-                : "border-border hover:bg-card text-muted"
-            }`}
-          >
-            {n}
-          </button>
-        ))}
-      </div>
-    </div>,
-
-    // Step 7: Excluded companies
-    <div key="excluded" className="space-y-4">
-      <div>
-        <h2 className="text-sm font-bold">Any companies to skip?</h2>
-        <p className="text-[10px] text-muted mt-1">Optional. Comma-separated.</p>
-      </div>
-      <textarea
-        value={excludedCompanies}
-        onChange={(e) => setExcludedCompanies(e.target.value)}
-        rows={3}
-        placeholder="Company X, Company Y"
-        className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
-      />
-    </div>,
-
-    // Step 8: Priorities (optional free-text boosters)
-    <div key="priorities" className="space-y-4">
-      <div>
-        <h2 className="text-sm font-bold">Any industries or keywords to prioritize?</h2>
+        <h2 className="text-sm font-bold">Any focus areas?</h2>
         <p className="text-[11px] text-muted mt-1">
-          Optional. These boost matches for roles in these spaces or using these terms. Leave blank if unsure.
+          Optional. Boosts matches for roles in these spaces. Leave blank if unsure.
         </p>
       </div>
       <div className="space-y-3">
@@ -524,53 +514,46 @@ export default function OnboardingPage() {
             className="w-full mt-1 px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none"
           />
         </div>
+        {verticalPacks.length > 0 && (
+          <div>
+            <label className="text-[10px] text-muted mono uppercase tracking-widest">Verticals</label>
+            <p className="text-[10px] text-muted mt-1 mb-2">
+              We&rsquo;ll auto-track the best-known companies in each.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {verticalPacks.map((pack) => {
+                const selected = selectedVerticalIds.includes(pack.id);
+                const count = pack.ats_slugs?.length ?? 0;
+                return (
+                  <button
+                    key={pack.id}
+                    type="button"
+                    onClick={() => toggleVertical(pack.id)}
+                    className={`text-left px-3 py-2.5 rounded-lg border transition-all ${
+                      selected
+                        ? "border-accent-purple bg-accent-purple/5"
+                        : "border-border hover:bg-card"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">{pack.icon}</span>
+                      <span className={`text-xs ${selected ? "font-semibold" : "font-medium text-foreground"}`}>
+                        {pack.name}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-muted mono uppercase tracking-widest mt-1.5">
+                      {count} {count === 1 ? "co." : "cos."}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>,
 
-    // Step 9: Verticals (multi-select curated packs)
-    <div key="verticals" className="space-y-4">
-      <div>
-        <h2 className="text-sm font-bold">Track any verticals?</h2>
-        <p className="text-[11px] text-muted mt-1">
-          We'll auto-track the best-known companies in these verticals alongside the community pool.
-        </p>
-      </div>
-      {verticalPacks.length === 0 ? (
-        <p className="text-[11px] text-muted">Loading…</p>
-      ) : (
-        <div className="grid grid-cols-2 gap-2">
-          {verticalPacks.map((pack) => {
-            const selected = selectedVerticalIds.includes(pack.id);
-            const count = pack.ats_slugs?.length ?? 0;
-            return (
-              <button
-                key={pack.id}
-                type="button"
-                onClick={() => toggleVertical(pack.id)}
-                className={`text-left px-3 py-3 rounded-lg border transition-all ${
-                  selected
-                    ? "border-accent-purple bg-accent-purple/5"
-                    : "border-border hover:bg-card"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-lg">{pack.icon}</span>
-                  <span className={`text-sm ${selected ? "font-semibold" : "font-medium text-foreground"}`}>
-                    {pack.name}
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted mt-1 line-clamp-2">{pack.description}</p>
-                <p className="text-[10px] text-muted mono uppercase tracking-widest mt-2">
-                  {count} {count === 1 ? "company" : "companies"}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>,
-
-    // Step 10: Resume (required)
+    // Step 6: Resume (required)
     <div key="resume" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Upload your resume</h2>
@@ -589,7 +572,7 @@ export default function OnboardingPage() {
       )}
     </div>,
 
-    // Step 11: Gmail (OPTIONAL)
+    // Step 7: Gmail (OPTIONAL)
     <div key="gmail" className="space-y-4">
       <div>
         <h2 className="text-sm font-bold">Connect Gmail (optional)</h2>
@@ -625,7 +608,7 @@ export default function OnboardingPage() {
       <p className="text-[10px] text-muted">We never send emails or store message content. Only subject lines are scanned to detect status changes.</p>
     </div>,
 
-    // Step 12: Review
+    // Step 8: Review
     <div key="review" className="space-y-4">
       <h2 className="text-sm font-bold">Review your setup</h2>
       <div className="bg-card border border-border rounded-xl p-4 space-y-3 text-xs">
@@ -635,10 +618,12 @@ export default function OnboardingPage() {
         <Row label="Min Salary" value={salaryFloor ? `$${salaryFloor.toLocaleString()}` : "Any"} />
         <Row label="Sources" value={sources.map((s) => SOURCES.find((x) => x.id === s)?.label).join(", ")} />
         <Row label="Daily Limit" value={`${dailyLimit} jobs/day`} />
-        <Row label="Excluded" value={excludedCompanies || "None"} />
         <Row label="Resume" value={resumeUploaded ? `✓ Uploaded (${resumeLength.toLocaleString()} chars)` : "⚠ Not uploaded"} />
         <Row label="Gmail" value={gmailConnected ? "✓ Connected" : "Skipped (optional)"} />
       </div>
+      <p className="text-[10px] text-muted text-center">
+        Want to block specific companies? Add them in Settings once you&rsquo;re in.
+      </p>
       {!resumeUploaded && (
         <p className="text-xs text-accent-red">Please upload your resume before continuing.</p>
       )}

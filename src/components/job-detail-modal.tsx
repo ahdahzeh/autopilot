@@ -239,7 +239,6 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
       showToast({
         id: `feedback-${job.id}-${Date.now()}`,
         message: "Got it — we'll avoid similar roles on your next scrape.",
-        onUndo: () => {},
       });
       onClose();
     }
@@ -278,13 +277,11 @@ Apply: ${job.applyLink || "-"}`;
       showToast({
         id: `copy-${job.id}-${Date.now()}`,
         message: "Copied — paste into the ATS form.",
-        onUndo: () => {},
       });
     } catch {
       showToast({
         id: `copy-err-${job.id}-${Date.now()}`,
         message: "Couldn't copy — clipboard blocked by this browser.",
-        onUndo: () => {},
       });
     }
   }

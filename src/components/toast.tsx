@@ -5,7 +5,9 @@ import { useEffect, useState } from "react";
 type ToastItem = {
   id: string;
   message: string;
-  onUndo: () => void;
+  // Optional — when omitted the toast renders without an Undo button.
+  // Use for one-way notifications ("Copied!", "Saved", error flashes).
+  onUndo?: () => void;
 };
 
 let addToastFn: ((toast: ToastItem) => void) | null = null;
@@ -40,15 +42,17 @@ export function ToastContainer() {
           className={`flex items-center gap-3 bg-foreground text-background px-4 py-2.5 rounded-lg shadow-lg text-sm transition-opacity duration-500 ${toast.expiring ? "opacity-0" : "opacity-100"}`}
         >
           <span>{toast.message}</span>
-          <button
-            onClick={() => {
-              toast.onUndo();
-              setToasts((prev) => prev.filter((t) => t.id !== toast.id));
-            }}
-            className="font-medium text-accent-green hover:underline text-xs"
-          >
-            Undo
-          </button>
+          {toast.onUndo && (
+            <button
+              onClick={() => {
+                toast.onUndo?.();
+                setToasts((prev) => prev.filter((t) => t.id !== toast.id));
+              }}
+              className="font-medium text-accent-green hover:underline text-xs"
+            >
+              Undo
+            </button>
+          )}
         </div>
       ))}
     </div>
