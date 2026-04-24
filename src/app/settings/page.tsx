@@ -6,15 +6,17 @@ import { useRouter } from "next/navigation";
 import { ResumeUpload } from "@/components/resume-upload";
 import { TONES, MODELS, type Tone, type ModelChoice } from "@/lib/tailor-prompts";
 
+// LinkedIn last — the scraper processes sources in order, and LinkedIn
+// is the slowest / most throttled. Keep fast sources up front.
 const SOURCES = [
-  { id: "linkedin", label: "LinkedIn" },
-  { id: "builtin", label: "BuiltIn" },
   { id: "hiringcafe", label: "Hiring Cafe" },
+  { id: "builtin", label: "BuiltIn" },
+  { id: "bandana", label: "Bandana" },
+  { id: "welcometothejungle", label: "Welcome to the Jungle" },
   { id: "greenhouse", label: "Greenhouse (ATS)" },
   { id: "lever", label: "Lever (ATS)" },
   { id: "ashby", label: "Ashby (ATS)" },
-  { id: "bandana", label: "Bandana" },
-  { id: "welcometothejungle", label: "Welcome to the Jungle" },
+  { id: "linkedin", label: "LinkedIn" },
 ];
 
 const ATS_SOURCE_IDS = new Set(["greenhouse", "lever", "ashby"]);

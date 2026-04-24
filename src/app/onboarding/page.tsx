@@ -5,12 +5,14 @@ import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { ResumeUpload } from "@/components/resume-upload";
 
+// LinkedIn ordered last (it's slow and frequently throttled; the scraper
+// processes this array in order).
 const SOURCES = [
-  { id: "linkedin", label: "LinkedIn" },
-  { id: "builtin", label: "BuiltIn" },
   { id: "hiringcafe", label: "Hiring Cafe" },
+  { id: "builtin", label: "BuiltIn" },
   { id: "bandana", label: "Bandana" },
   { id: "welcometothejungle", label: "Welcome to the Jungle" },
+  { id: "linkedin", label: "LinkedIn" },
 ];
 
 const DAILY_LIMITS = [10, 20, 30];
@@ -43,15 +45,19 @@ export default function OnboardingPage() {
   // out of the box. ATS integrations (greenhouse/lever/ashby) draw from a
   // shared community-seeded company pool, so users benefit without
   // configuring tracked companies themselves. Prune in Settings if needed.
+  //
+  // Order matters: LinkedIn goes LAST because it's the slowest and most
+  // frequently bot-detected source. If Railway scrapes sequentially, this
+  // ensures the fast sources populate the feed before LinkedIn might hang.
   const [sources, setSources] = useState<string[]>([
-    "linkedin",
-    "builtin",
     "hiringcafe",
+    "builtin",
     "bandana",
     "welcometothejungle",
     "greenhouse",
     "lever",
     "ashby",
+    "linkedin",
   ]);
   const [dailyLimit, setDailyLimit] = useState(20);
   const [excludedCompanies, setExcludedCompanies] = useState("");
