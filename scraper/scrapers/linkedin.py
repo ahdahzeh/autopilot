@@ -1,12 +1,21 @@
 """LinkedIn Job Scraper — Public Guest API, per-user titles/locations."""
 
 import asyncio
+import os
 import random
 import re
 from urllib.parse import quote_plus
 from playwright.async_api import async_playwright
 from loguru import logger
 from models import JobListing
+
+# Cap the title×location matrix. With 7 titles × 3 locations = 21 searches at
+# ~15s each plus detail fetches, one LinkedIn pass can easily run 5+ minutes —
+# far past any reasonable caller timeout. MAX_SEARCHES caps total unique
+# search URLs; MAX_DETAIL_CARDS_PER_SEARCH caps per-search detail fetches
+# (the expensive part). Both tunable via Railway env.
+MAX_SEARCHES = int(os.getenv("LINKEDIN_MAX_SEARCHES", "6"))
+MAX_DETAIL_CARDS_PER_SEARCH = int(os.getenv("LINKEDIN_MAX_DETAILS", "3"))
 
 LINKEDIN_LOCATION_MAP = {
     "new york": "New York City Metropolitan Area",
@@ -129,11 +138,26 @@ async def get_detail(page, url: str) -> dict:
 
 
 async def scrape(titles: list[str], locations: list[str], limit: int = 20) -> list[JobListing]:
-    logger.info(f"LinkedIn: scraping {len(titles)} titles x {len(locations)} locations")
+    mapped_locs = list(set(map_location(loc) for loc in locations))
+
+    # Build the search matrix up front and truncate before running, so we
+    # don't discover halfway through that we've blown the budget. Alternate
+    # title/location pairing (round-robin) gives each location a shot before
+    # piling on the first title's variants.
+    pairs = []
+    for title in titles:
+        for loc in mapped_locs:
+            pairs.append((title, loc))
+    if len(pairs) > MAX_SEARCHES:
+        logger.info(
+            f"LinkedIn: truncating {len(pairs)} title×location pairs to {MAX_SEARCHES}"
+        )
+        pairs = pairs[:MAX_SEARCHES]
+
+    logger.info(f"LinkedIn: running {len(pairs)} searches (max details/search: {MAX_DETAIL_CARDS_PER_SEARCH})")
+
     all_jobs = []
     seen = set()
-
-    mapped_locs = list(set(map_location(loc) for loc in locations))
 
     pw = await async_playwright().start()
     browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -144,50 +168,49 @@ async def scrape(titles: list[str], locations: list[str], limit: int = 20) -> li
     page = await context.new_page()
 
     try:
-        for title in titles:
-            for location in mapped_locs:
-                if len(all_jobs) >= limit:
-                    break
-                url = build_url(title, location)
-                logger.info(f"  '{title}' in {location}")
-                try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                    await asyncio.sleep(random.uniform(2, 4))
-                    await scroll_and_load(page)
+        for title, location in pairs:
+            if len(all_jobs) >= limit:
+                break
+            url = build_url(title, location)
+            logger.info(f"  '{title}' in {location}")
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(random.uniform(1.5, 3))
+                await scroll_and_load(page)
 
-                    cards = await extract_cards(page)
-                    new_cards = [c for c in cards if c["url"] not in seen]
-                    for c in new_cards:
-                        seen.add(c["url"])
+                cards = await extract_cards(page)
+                new_cards = [c for c in cards if c["url"] not in seen]
+                for c in new_cards:
+                    seen.add(c["url"])
 
-                    logger.info(f"    {len(cards)} cards, {len(new_cards)} new")
+                logger.info(f"    {len(cards)} cards, {len(new_cards)} new")
 
-                    for card in new_cards[:5]:
-                        if len(all_jobs) >= limit:
-                            break
-                        await asyncio.sleep(random.uniform(2, 4))
-                        detail = await get_detail(page, card["url"])
-                        yoe = parse_years(detail["description"]) if detail["description"] else None
+                for card in new_cards[:MAX_DETAIL_CARDS_PER_SEARCH]:
+                    if len(all_jobs) >= limit:
+                        break
+                    await asyncio.sleep(random.uniform(1.5, 3))
+                    detail = await get_detail(page, card["url"])
+                    yoe = parse_years(detail["description"]) if detail["description"] else None
 
-                        job = JobListing(
-                            source="LinkedIn",
-                            title=card["title"],
-                            company=card["company"],
-                            location=card["location"],
-                            is_remote="remote" in card["location"].lower(),
-                            description=detail["description"],
-                            years_experience=yoe,
-                            salary_range=detail["salary_range"],
-                            apply_url=card["url"],
-                            listing_url=card["url"],
-                        )
-                        job.generate_id()
-                        all_jobs.append(job)
+                    job = JobListing(
+                        source="LinkedIn",
+                        title=card["title"],
+                        company=card["company"],
+                        location=card["location"],
+                        is_remote="remote" in card["location"].lower(),
+                        description=detail["description"],
+                        years_experience=yoe,
+                        salary_range=detail["salary_range"],
+                        apply_url=card["url"],
+                        listing_url=card["url"],
+                    )
+                    job.generate_id()
+                    all_jobs.append(job)
 
-                except Exception as e:
-                    logger.error(f"    Failed: {e}")
+            except Exception as e:
+                logger.error(f"    Failed: {e}")
 
-                await asyncio.sleep(random.uniform(2, 4))
+            await asyncio.sleep(random.uniform(1.5, 3))
     finally:
         await browser.close()
         await pw.stop()

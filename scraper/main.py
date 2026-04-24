@@ -1,5 +1,6 @@
 """Autopilot Scraper Service — FastAPI app for Railway."""
 
+import asyncio
 import os
 from datetime import datetime
 
@@ -32,6 +33,23 @@ SCRAPER_MAP = {
 # ATS scrapers iterate user-specified companies rather than running keyword
 # searches, so passing an empty companies list is a no-op for them.
 ATS_SOURCES = {"greenhouse", "lever", "ashby"}
+
+# Per-source budget in seconds. LinkedIn is allowed more time because it's
+# the slowest (Playwright + N×M matrix + anti-bot delays), but capped hard
+# so a hung session can't starve the downstream loop or blow the overall
+# Vercel budget on the calling side. Tune in Railway env if a source
+# chronically hits its ceiling.
+DEFAULT_SOURCE_TIMEOUT = int(os.getenv("SOURCE_TIMEOUT_SECONDS", "60"))
+SOURCE_TIMEOUTS = {
+    "linkedin": int(os.getenv("LINKEDIN_TIMEOUT_SECONDS", "90")),
+    "builtin": DEFAULT_SOURCE_TIMEOUT,
+    "hiringcafe": DEFAULT_SOURCE_TIMEOUT,
+    # ATS scrapers hit REST JSON endpoints and rarely exceed ~10s; keep
+    # the budget tight so a flaky board can't consume the whole window.
+    "greenhouse": 45,
+    "lever": 45,
+    "ashby": 45,
+}
 
 
 def get_supabase():
@@ -86,29 +104,39 @@ async def scrape(req: ScrapeRequest):
                 logger.info(f"{source}: no tracked companies, skipping")
                 continue
 
-        try:
-            jobs = await scraper_fn(
-                titles=req.target_titles,
-                locations=req.target_locations,
-                limit=per_source_limit,
-                companies=req.companies if src_lower in ATS_SOURCES else None,
-            )
-            all_jobs.extend(jobs)
-            logger.info(f"{source}: scraped {len(jobs)} jobs")
-        except TypeError:
-            # Legacy scrapers without the companies kwarg
+        timeout = SOURCE_TIMEOUTS.get(src_lower, DEFAULT_SOURCE_TIMEOUT)
+        source_start = datetime.now()
+
+        async def _run():
             try:
-                jobs = await scraper_fn(
+                return await scraper_fn(
+                    titles=req.target_titles,
+                    locations=req.target_locations,
+                    limit=per_source_limit,
+                    companies=req.companies if src_lower in ATS_SOURCES else None,
+                )
+            except TypeError:
+                # Legacy scrapers without the companies kwarg
+                return await scraper_fn(
                     titles=req.target_titles,
                     locations=req.target_locations,
                     limit=per_source_limit,
                 )
-                all_jobs.extend(jobs)
-                logger.info(f"{source}: scraped {len(jobs)} jobs")
-            except Exception as e:
-                logger.error(f"{source} scraper failed: {e}")
+
+        try:
+            jobs = await asyncio.wait_for(_run(), timeout=timeout)
+            elapsed = (datetime.now() - source_start).total_seconds()
+            all_jobs.extend(jobs)
+            logger.info(f"{source}: scraped {len(jobs)} jobs in {elapsed:.1f}s")
+        except asyncio.TimeoutError:
+            elapsed = (datetime.now() - source_start).total_seconds()
+            logger.warning(
+                f"{source} timed out after {elapsed:.1f}s (budget {timeout}s) — "
+                f"moving on so the rest of the run doesn't stall"
+            )
         except Exception as e:
-            logger.error(f"{source} scraper failed: {e}")
+            elapsed = (datetime.now() - source_start).total_seconds()
+            logger.error(f"{source} scraper failed after {elapsed:.1f}s: {e}")
 
     # Deduplicate
     unique_jobs = deduplicate(all_jobs, existing_keys)
