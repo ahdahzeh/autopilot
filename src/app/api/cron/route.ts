@@ -26,11 +26,23 @@ export async function GET(request: Request) {
     return Response.json({ error: "Failed to fetch users" }, { status: 500 });
   }
 
+  // Shuffle so the same first-N users don't always win the cron lottery. If
+  // the cron times out partway (Vercel's 300s ceiling vs Railway's slow tail),
+  // it was always the SAME tail of users that got skipped — they never got
+  // scraped. Fisher-Yates: each user has equal chance of going first today.
+  // scrapeForUser() now caps each call at 90s so this should rarely matter,
+  // but the shuffle is cheap insurance against future regressions.
+  for (let i = users.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [users[i], users[j]] = [users[j], users[i]];
+  }
+
   // Run scrapes in throttled batches. Fully parallel (Promise.all on all 8+
   // users) OOM'd Railway because each Playwright session eats ~400MB and the
   // container is tighter than that. Fully sequential starves Vercel's 300s
   // budget. Batches of 2 are the sweet spot — two scrapes share Railway RAM
-  // comfortably and we fit ~10 users in under 3 minutes.
+  // and we fit ~6 users in under 5 minutes when scrapeForUser honors its
+  // 90s per-user fetch timeout.
   const CONCURRENCY = 2;
   const results: Awaited<ReturnType<typeof scrapeForUser>>[] = [];
   for (let i = 0; i < users.length; i += CONCURRENCY) {

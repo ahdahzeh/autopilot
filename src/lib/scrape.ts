@@ -76,10 +76,20 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
     new Set((feedbackRows ?? []).map((r) => (r.company ?? "").trim()).filter(Boolean)),
   );
 
+  // Hard ceiling on the Railway scrape so the Vercel cron can finish its
+  // outer loop within maxDuration=300s. Without this, a slow LinkedIn run on
+  // user A blocks the cron at await-time, the function gets killed, and
+  // users B+ are never attempted. Railway keeps working on the request after
+  // we abort — its DB writes still land — we just stop waiting for the
+  // response. Trade-off: any jobs Railway hadn't yet inserted at abort time
+  // will appear after the cron returns, which is fine for the daily flow.
+  const FETCH_TIMEOUT_MS = 90_000;
+
   try {
     const res = await fetch(`${scraperUrl}/scrape`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       body: JSON.stringify({
         user_id: user.id,
         target_titles: user.target_titles,
@@ -103,6 +113,13 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
     const data = await res.json();
     return { user_id: user.id, ...data };
   } catch (err) {
-    return { user_id: user.id, error: String(err) };
+    // AbortError from the timeout is the common case here; lump everything
+    // else under "error" so the cron's results array still has a row per user.
+    const isTimeout =
+      err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    return {
+      user_id: user.id,
+      error: isTimeout ? `scrape timed out after ${FETCH_TIMEOUT_MS}ms` : String(err),
+    };
   }
 }

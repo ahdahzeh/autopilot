@@ -5,13 +5,13 @@ import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { ResumeUpload } from "@/components/resume-upload";
 
-// LinkedIn ordered last (it's slow and frequently throttled; the scraper
-// processes this array in order).
+// Only sources with a real scraper module on Railway. Bandana and
+// Welcome-to-the-Jungle were retired but kept appearing in profile.sources,
+// burning ~25% of each user's source budget on "unknown source" no-ops.
+// LinkedIn ordered last because it's slow and frequently throttled.
 const SOURCES = [
   { id: "hiringcafe", label: "Hiring Cafe" },
   { id: "builtin", label: "BuiltIn" },
-  { id: "bandana", label: "Bandana" },
-  { id: "welcometothejungle", label: "Welcome to the Jungle" },
   { id: "linkedin", label: "LinkedIn" },
 ];
 
@@ -61,8 +61,6 @@ export default function OnboardingPage() {
   const [sources, setSources] = useState<string[]>([
     "hiringcafe",
     "builtin",
-    "bandana",
-    "welcometothejungle",
     "greenhouse",
     "lever",
     "ashby",
