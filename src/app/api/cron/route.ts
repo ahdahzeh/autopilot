@@ -37,22 +37,18 @@ export async function GET(request: Request) {
     [users[i], users[j]] = [users[j], users[i]];
   }
 
-  // Run scrapes in throttled batches. Fully parallel (Promise.all on all 8+
-  // users) OOM'd Railway because each Playwright session eats ~400MB and the
-  // container is tighter than that. Fully sequential starves Vercel's 300s
-  // budget. Batches of 2 are the sweet spot — two scrapes share Railway RAM
-  // and we fit ~6 users in under 5 minutes when scrapeForUser honors its
-  // 90s per-user fetch timeout.
-  const CONCURRENCY = 2;
-  const results: Awaited<ReturnType<typeof scrapeForUser>>[] = [];
-  for (let i = 0; i < users.length; i += CONCURRENCY) {
-    const batch = users.slice(i, i + CONCURRENCY);
-    const settled = await Promise.allSettled(batch.map((u) => scrapeForUser(u.id)));
-    for (let j = 0; j < settled.length; j++) {
-      const s = settled[j];
-      results.push(s.status === "fulfilled" ? s.value : { user_id: batch[j].id, error: String(s.reason) });
-    }
-  }
+  // Fire all per-user scrapes at Railway in parallel. Railway has its own
+  // global Semaphore(1) on /scrape so they queue server-side and process one
+  // at a time — preventing OOM. From Vercel's perspective each fetch is
+  // independent: those that complete within scrapeForUser's 90s timeout
+  // return data, the rest abort but Railway keeps processing in the
+  // background and writes to Supabase. Even if Vercel kills the function at
+  // maxDuration=300s, Railway has already received every request body and
+  // will work through the queue on its own clock.
+  const settled = await Promise.allSettled(users.map((u) => scrapeForUser(u.id)));
+  const results: Awaited<ReturnType<typeof scrapeForUser>>[] = settled.map((s, j) =>
+    s.status === "fulfilled" ? s.value : { user_id: users[j].id, error: String(s.reason) },
+  );
 
   // Gmail sync — internal fetch back to our own sync endpoint.
   try {

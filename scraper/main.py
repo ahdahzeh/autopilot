@@ -97,8 +97,23 @@ async def health():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
 
 
+# Global serialization for /scrape. The container has finite RAM (~1GB on
+# our Railway plan); each concurrent scrape spawns up to PLAYWRIGHT_CONCURRENCY
+# browsers at ~400MB apiece, so two parallel requests reliably OOM-kill the
+# process (we observed 'Killed' in logs whenever the cron sent batched calls).
+# Queueing instead of failing means callers wait their turn — fine for our
+# fire-and-forget cron, and the per-source timeouts cap each scrape so the
+# queue can't grow unbounded.
+_scrape_lock = asyncio.Semaphore(1)
+
+
 @app.post("/scrape")
 async def scrape(req: ScrapeRequest):
+    async with _scrape_lock:
+        return await _scrape_inner(req)
+
+
+async def _scrape_inner(req: ScrapeRequest):
     logger.info(f"Scrape request: user={req.user_id}, titles={req.target_titles}, "
                 f"locations={req.target_locations}, sources={req.sources}, limit={req.daily_job_limit}")
 
