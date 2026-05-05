@@ -98,7 +98,12 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
         excluded_companies: user.excluded_companies,
         excluded_titles: user.excluded_titles ?? [],
         min_match_score: user.min_match_score ?? 0,
-        sources: user.sources,
+        // Strip browser-based sources on memory-constrained hosts (Render free
+        // tier is 512 MB; a single Chromium instance is ~400 MB and reliably
+        // OOMs). Re-enable when we migrate to Browserbase.
+        sources: (user.sources ?? []).filter(
+          (s: string) => !["linkedin", "builtin", "hiringcafe"].includes(s.toLowerCase()),
+        ),
         daily_job_limit: remaining,
         resume_text: user.resume_text || "",
         companies,
