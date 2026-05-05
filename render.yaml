@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: autopilot-scraper
+    runtime: docker
+    dockerfilePath: ./scraper/Dockerfile
+    dockerContext: ./scraper
+    plan: free
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PLAYWRIGHT_CONCURRENCY
+        value: "1"
+      - key: HAIKU_BATCH_SIZE
+        value: "20"
+      - key: SOURCE_TIMEOUT_SECONDS
+        value: "55"
+      - key: LINKEDIN_TIMEOUT_SECONDS
+        value: "80"

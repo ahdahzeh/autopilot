@@ -4,15 +4,43 @@ import { processOnboardingReminders, processEngagementEmails, processDailyDigest
 
 // Allow up to 5 minutes per invocation — the sequential for-loop was killing
 // the cron mid-pass before most users got scraped. We now parallelize, but
-// the timeout bump is still load-bearing: a slow Railway scraper + 20+ users
+// the timeout bump is still load-bearing: a slow scraper + 20+ users
 // can still push past 60s.
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+// Render free tier spins down after 15 min of inactivity. Poll /health until
+// the container is warm before firing scrapes — avoids the first user's
+// request timing out waiting for a cold start. Gives up after 60s so a
+// permanently broken scraper doesn't eat the whole cron budget.
+async function warmupScraper(scraperUrl: string): Promise<void> {
+  const POLL_MS = 5_000;
+  const MAX_MS = 60_000;
+  const start = Date.now();
+  while (Date.now() - start < MAX_MS) {
+    try {
+      const res = await fetch(`${scraperUrl}/health`, {
+        signal: AbortSignal.timeout(4_000),
+      });
+      if (res.ok) return;
+    } catch {
+      // container still waking — keep polling
+    }
+    await new Promise((r) => setTimeout(r, POLL_MS));
+  }
+  console.warn("[cron] scraper warmup timed out after 60s — proceeding anyway");
+}
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
   if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Wake the scraper before firing per-user requests so the first user
+  // doesn't eat the cold-start latency in their own 90s budget.
+  if (process.env.RAILWAY_SCRAPER_URL) {
+    await warmupScraper(process.env.RAILWAY_SCRAPER_URL.trim().replace(/\/+$/, ""));
   }
 
   const supabase = createServiceClient();
