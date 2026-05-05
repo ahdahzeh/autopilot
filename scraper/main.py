@@ -218,7 +218,11 @@ async def _scrape_inner(req: ScrapeRequest):
             # Gate browser-launching scrapers behind the shared semaphore so we
             # never have more than PLAYWRIGHT_CONCURRENCY Chromium processes
             # alive at once. ATS scrapers are pure HTTP and run freely.
+            # PLAYWRIGHT_CONCURRENCY=0 disables all browser sources entirely —
+            # useful on memory-constrained hosts where a single Chromium OOMs.
             if src_lower in PLAYWRIGHT_SOURCES:
+                if PLAYWRIGHT_CONCURRENCY == 0:
+                    return (source, [], "playwright disabled (PLAYWRIGHT_CONCURRENCY=0)")
                 async with playwright_sem:
                     jobs = await asyncio.wait_for(_invoke(), timeout=timeout)
             else:
