@@ -1,0 +1,90 @@
+# Daily job ingest.
+#
+# This replaces the Vercel cron + hosted-scraper path. That path depended on a
+# free-tier container, which was suspended for idling, and ingest stopped on
+# 2026-06-10 without anything going red. The runner starts the scraper itself,
+# so there is no always-on host to suspend, no 300s function ceiling, and no
+# 512 MB memory limit forcing Chromium off.
+#
+# Required repository secrets:
+#   NEXT_PUBLIC_SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY
+# Optional:
+#   ANTHROPIC_API_KEY  - enables Haiku rescoring. Without it the scraper falls
+#                        back to heuristic scores and the run costs nothing.
+name: Daily job ingest
+
+on:
+  schedule:
+    # 13:00 UTC, matching the Vercel cron this replaces.
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      RAILWAY_SCRAPER_URL: http://127.0.0.1:8000
+      # The runner has 16 GB, so Chromium sources are back on. These two
+      # produced 76% of every job the product has ever ingested.
+      ALLOW_BROWSER_SOURCES: "1"
+      PLAYWRIGHT_CONCURRENCY: "2"
+      SOURCE_TIMEOUT_SECONDS: "120"
+      LINKEDIN_TIMEOUT_SECONDS: "180"
+      SCRAPE_TIMEOUT_MS: "600000"
+      INGEST_CONCURRENCY: "2"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scraper/requirements.txt
+
+      - name: Install scraper dependencies
+        working-directory: scraper
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Start scraper
+        working-directory: scraper
+        run: |
+          uvicorn main:app --host 127.0.0.1 --port 8000 --log-level info > "$RUNNER_TEMP/scraper.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+              echo "scraper healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "scraper never became healthy"
+          cat "$RUNNER_TEMP/scraper.log"
+          exit 1
+
+      - name: Run ingest
+        run: npx tsx scripts/ingest/run.ts
+
+      - name: Scraper log
+        if: always()
+        run: tail -n 200 "$RUNNER_TEMP/scraper.log" || true
