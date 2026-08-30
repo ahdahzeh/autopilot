@@ -16,6 +16,13 @@ import {
   matchSchema,
   strategySchema,
 } from "@/lib/tailor-schemas";
+import {
+  auditBlock,
+  correctWordCounts,
+  correctionSuffix,
+  normalizeDeep,
+  type Violation,
+} from "@/lib/output-guard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -136,6 +143,14 @@ export async function POST(req: Request) {
     tone,
   };
 
+  // Figures are checked against the FULL resume, not the truncated prompt
+  // copy, so a real number living past the 8000 char cut is not called a
+  // fabrication. The job description counts as a citable source too.
+  const auditCtx = {
+    resume: rawResume,
+    jobDescription: body.jobDescription,
+  };
+
   const clientAbort = req.signal;
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -183,36 +198,33 @@ export async function POST(req: Request) {
           block === "short_cover" ? 800 :
           1400;
 
-        try {
-          let parsed: any;
-          const schema = (STRUCTURED_SCHEMAS as Record<string, any>)[block];
+        const schema = (STRUCTURED_SCHEMAS as Record<string, any>)[block];
+        const generateOnce = async (text: string, tokens: number): Promise<any> => {
           if (schema) {
             // generateObject handles its own JSON-retry loop.
             const { object } = await generateObject({
               model,
-              prompt,
+              prompt: text,
               schema,
-              maxOutputTokens,
+              maxOutputTokens: tokens,
               abortSignal: clientAbort,
             });
-            parsed = object;
-          } else {
-            const { text } = await generateText({
-              model,
-              prompt,
-              maxOutputTokens,
-              abortSignal: clientAbort,
-            });
-            parsed = parseJsonLoosely(text);
-            if (!parsed) {
-              const retry = await generateText({
-                model,
-                prompt,
-                maxOutputTokens: Math.round(maxOutputTokens * 1.6),
-                abortSignal: clientAbort,
-              });
-              parsed = parseJsonLoosely(retry.text);
-            }
+            return object;
+          }
+          const { text: raw } = await generateText({
+            model,
+            prompt: text,
+            maxOutputTokens: tokens,
+            abortSignal: clientAbort,
+          });
+          return parseJsonLoosely(raw);
+        };
+
+        try {
+          let parsed: any = await generateOnce(prompt, maxOutputTokens);
+          if (!parsed) {
+            // Truncation is the usual cause, so give the retry more room.
+            parsed = await generateOnce(prompt, Math.round(maxOutputTokens * 1.6));
           }
 
           if (!parsed) {
@@ -220,8 +232,35 @@ export async function POST(req: Request) {
             return null;
           }
 
-          parsed = stripEmDashes(parsed);
-          send("done", { block, data: parsed });
+          // Punctuation and quote style are fixed silently; a model cannot do
+          // a character substitution better than we can.
+          parsed = correctWordCounts(block, normalizeDeep(parsed));
+
+          // What is left needs different words, so it costs one retry. See
+          // src/lib/output-guard.ts for why this exists.
+          let violations: Violation[] = auditBlock(block, parsed, auditCtx);
+          if (violations.length > 0) {
+            const second = await generateOnce(
+              prompt + correctionSuffix(violations),
+              maxOutputTokens,
+            );
+            if (second) {
+              const cleaned = correctWordCounts(block, normalizeDeep(second));
+              const after = auditBlock(block, cleaned, auditCtx);
+              // Keep whichever attempt broke fewer rules. A retry that makes
+              // things worse should not win just because it went second.
+              if (after.length < violations.length) {
+                parsed = cleaned;
+                violations = after;
+              }
+            }
+          }
+
+          send("done", {
+            block,
+            data: parsed,
+            violations: violations.length > 0 ? violations : undefined,
+          });
 
           if (block === "match" && body.jobId) {
             // Persist to job row + cache so the next visit is instant.
@@ -300,24 +339,6 @@ function parseJsonLoosely(text: string): any | null {
   } catch {
     return null;
   }
-}
-
-function stripEmDashes(value: unknown): any {
-  if (typeof value === "string") {
-    return value
-      .replace(/\u2014/g, ", ")
-      .replace(/\u2013/g, "-")
-      .replace(/\s+,/g, ",");
-  }
-  if (Array.isArray(value)) return value.map(stripEmDashes);
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = stripEmDashes(v);
-    }
-    return out;
-  }
-  return value;
 }
 
 async function readMatchCache(

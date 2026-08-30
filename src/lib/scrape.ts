@@ -13,7 +13,11 @@ export type ScrapeResult = {
  * and the user-triggered scrape endpoint (just the logged-in user).
  * Uses the service client; callers must verify the user_id they pass in.
  */
+const BROWSER_SOURCES = ["linkedin", "builtin", "hiringcafe"];
+
 export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
+  const allowBrowserSources = process.env.ALLOW_BROWSER_SOURCES === "1";
+
   const supabase = createServiceClient();
 
   const { data: user, error } = await supabase
@@ -83,7 +87,9 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
   // we abort — its DB writes still land — we just stop waiting for the
   // response. Trade-off: any jobs Railway hadn't yet inserted at abort time
   // will appear after the cron returns, which is fine for the daily flow.
-  const FETCH_TIMEOUT_MS = 90_000;
+  // Vercel's 300s ceiling is what forces the 90s default. The GitHub Actions
+  // runner has no such ceiling, so the ingest job raises this.
+  const FETCH_TIMEOUT_MS = Number(process.env.SCRAPE_TIMEOUT_MS ?? 90_000);
 
   try {
     const res = await fetch(`${scraperUrl}/scrape`, {
@@ -98,11 +104,14 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
         excluded_companies: user.excluded_companies,
         excluded_titles: user.excluded_titles ?? [],
         min_match_score: user.min_match_score ?? 0,
-        // Strip browser-based sources on memory-constrained hosts (Render free
-        // tier is 512 MB; a single Chromium instance is ~400 MB and reliably
-        // OOMs). Re-enable when we migrate to Browserbase.
+        // Browser-based sources need ~400 MB for Chromium, which OOMs a
+        // 512 MB host. They also produced 76% of every job Autopilot has ever
+        // ingested, so switching them off is what flatlined yield. Hosts with
+        // real memory (the GitHub Actions runner) set ALLOW_BROWSER_SOURCES=1
+        // to turn them back on; anything else keeps the safe default.
         sources: (user.sources ?? []).filter(
-          (s: string) => !["linkedin", "builtin", "hiringcafe"].includes(s.toLowerCase()),
+          (s: string) =>
+            allowBrowserSources || !BROWSER_SOURCES.includes(s.toLowerCase()),
         ),
         daily_job_limit: remaining,
         resume_text: user.resume_text || "",
