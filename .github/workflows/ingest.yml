@@ -27,7 +27,10 @@ concurrency:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # Users are scraped one at a time at roughly 3 minutes each, so 17 users
+    # take about 55 minutes. The runner kills the scraper when the job ends,
+    # so a ceiling that is too low silently drops whoever is still queued.
+    timeout-minutes: 120
 
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
@@ -42,7 +45,8 @@ jobs:
       SOURCE_TIMEOUT_SECONDS: "120"
       LINKEDIN_TIMEOUT_SECONDS: "180"
       SCRAPE_TIMEOUT_MS: "600000"
-      INGEST_CONCURRENCY: "2"
+      # Matches the scraper's lock of one. Higher only queues requests.
+      INGEST_CONCURRENCY: "1"
 
     steps:
       - uses: actions/checkout@v4

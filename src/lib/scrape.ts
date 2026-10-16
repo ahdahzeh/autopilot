@@ -131,9 +131,14 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
     // else under "error" so the cron's results array still has a row per user.
     const isTimeout =
       err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    // fetch wraps the real failure in a bare "fetch failed"; the code on its
+    // cause (UND_ERR_HEADERS_TIMEOUT, ECONNREFUSED) is what says what broke.
+    const cause = err instanceof Error ? (err.cause as { code?: string } | undefined)?.code : undefined;
     return {
       user_id: user.id,
-      error: isTimeout ? `scrape timed out after ${FETCH_TIMEOUT_MS}ms` : String(err),
+      error: isTimeout
+        ? `scrape timed out after ${FETCH_TIMEOUT_MS}ms`
+        : `${String(err)}${cause ? ` (${cause})` : ""}`,
     };
   }
 }
