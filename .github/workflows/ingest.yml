@@ -1,4 +1,4 @@
-# Daily job ingest.
+# Daily job ingest, then the daily emails.
 #
 # This replaces the Vercel cron + hosted-scraper path. That path depended on a
 # free-tier container, which was suspended for idling, and ingest stopped on
@@ -6,30 +6,110 @@
 # so there is no always-on host to suspend, no 300s function ceiling, and no
 # 512 MB memory limit forcing Chromium off.
 #
+# Shape of a run:
+#   plan    turns the shard count into a matrix (a few seconds)
+#   ingest  N parallel shards, each with its own scraper, each scraping the
+#           users whose id hashes to its index (scripts/ingest/run.ts)
+#   emails  after every shard has finished: Gmail sync, onboarding reminders,
+#           engagement nudges, daily digest (scripts/ingest/emails.ts). This
+#           used to be the Vercel cron at 13:00 UTC, which ran hours before
+#           ingest finished, so every digest described yesterday's jobs.
+#
 # Required repository secrets:
 #   NEXT_PUBLIC_SUPABASE_URL
 #   SUPABASE_SERVICE_ROLE_KEY
+#   RESEND_API_KEY     - the emails job fails without it, on purpose: a red
+#                        job is how a missing key gets noticed, a green job
+#                        that sent nothing is not.
 # Optional:
 #   ANTHROPIC_API_KEY  - enables Haiku rescoring. Without it the scraper falls
 #                        back to heuristic scores and the run costs nothing.
+#   CRON_SECRET        - lets the emails job run the live site's Gmail sync
+#                        before the digest, as the Vercel cron did. Skipped
+#                        when unset.
+#
+# The repo is public, so these logs are public. Neither script prints a user
+# id, an email address or a job title; users appear as 8-character hashes.
 name: Daily job ingest
 
 on:
   schedule:
-    # 13:00 UTC, matching the Vercel cron this replaces.
-    - cron: "0 13 * * *"
+    # 09:23 UTC. GitHub delays scheduled runs under load: the 13:00 slot
+    # started between 16:01 and 18:53 UTC on 2026-10-16..20, 3 to 6 hours
+    # late. Top-of-the-hour slots are the busiest, so the minute is odd and
+    # the hour early. A typical delay plus a 1 hour run lands the digest
+    # mid-morning Eastern; even the worst observed delay lands it before
+    # 12:30 Eastern instead of mid-afternoon.
+    - cron: "23 9 * * *"
   workflow_dispatch:
+    inputs:
+      shards:
+        description: "Parallel ingest shards, one scraper each (scheduled runs use 4)"
+        default: "4"
+        required: false
+        type: string
+      send_emails:
+        description: "Run the emails job after ingest"
+        default: true
+        required: false
+        type: boolean
+      emails_dry_run:
+        description: "Emails job: report what would be sent, send nothing, write nothing"
+        default: false
+        required: false
+        type: boolean
+
+# Nothing here writes to GitHub, so the token gets read-only access.
+permissions:
+  contents: read
 
 concurrency:
   group: ingest
   cancel-in-progress: false
 
 jobs:
-  ingest:
+  plan:
     runs-on: ubuntu-latest
-    # Users are scraped one at a time at roughly 3 minutes each, so 17 users
-    # take about 55 minutes. The runner kills the scraper when the job ends,
-    # so a ceiling that is too low silently drops whoever is still queued.
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.matrix.outputs.shards }}
+      total: ${{ steps.matrix.outputs.total }}
+    steps:
+      - id: matrix
+        env:
+          # Empty on scheduled runs (no inputs), so the fallback is the
+          # scheduled shard count. Change it here to reshard the daily run.
+          TOTAL: ${{ inputs.shards || '4' }}
+        run: |
+          if ! [[ "$TOTAL" =~ ^[0-9]+$ ]] || [ "$TOTAL" -lt 1 ] || [ "$TOTAL" -gt 20 ]; then
+            echo "shards must be an integer from 1 to 20, got '$TOTAL'"
+            exit 1
+          fi
+          shards="[$(seq -s, 0 $((TOTAL - 1)))]"
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "ingest will run $TOTAL shards: $shards"
+
+  ingest:
+    name: ingest shard ${{ matrix.shard }}
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      # One dead shard must not cancel the others: its users are the only ones
+      # who miss today, and the emails job still runs for everyone.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    # Users are scraped one at a time at roughly 3 minutes each (17 users took
+    # 48 to 54 minutes on 2026-10-16..19, installs included). At 4 shards and
+    # 60 users a shard holds 15 users: about 45 minutes of scraping plus 4 of
+    # setup. One stuck request is capped at SCRAPE_TIMEOUT_MS (10 minutes), so
+    # even five of the fifteen hitting that ceiling finishes inside 80. 120
+    # keeps 2.4x headroom over nominal, caps a wedged scraper far below the 6
+    # hour job limit, and with the worst observed delay still lets the emails
+    # job start before 12:30 Eastern. The runner kills the scraper when the
+    # job ends, so a ceiling that is too low silently drops whoever is still
+    # queued; as users grow, raise the shard count, not this number.
     timeout-minutes: 120
 
     env:
@@ -47,6 +127,9 @@ jobs:
       SCRAPE_TIMEOUT_MS: "600000"
       # Matches the scraper's lock of one. Higher only queues requests.
       INGEST_CONCURRENCY: "1"
+      # run.ts keeps the users whose sha1(id) lands on this index.
+      SHARD_INDEX: ${{ matrix.shard }}
+      SHARD_TOTAL: ${{ needs.plan.outputs.total }}
 
     steps:
       - uses: actions/checkout@v4
@@ -89,6 +172,47 @@ jobs:
       - name: Run ingest
         run: npx tsx scripts/ingest/run.ts
 
+      # The scraper logs titles and companies as it goes, and this log is
+      # public, so it is only shown when something broke and someone has to
+      # read it.
       - name: Scraper log
-        if: always()
+        if: failure()
         run: tail -n 200 "$RUNNER_TEMP/scraper.log" || true
+
+  emails:
+    needs: [plan, ingest]
+    # always(), not the default success(): one failed or timed-out shard must
+    # not stop everyone's digest, and the onboarding and engagement emails do
+    # not depend on ingest at all. (A timed-out job reports as cancelled, so
+    # !cancelled() is not a safe substitute.) The trade-off is that a manually
+    # cancelled run still sends its emails, unless send_emails was unticked.
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.send_emails) }}
+    runs-on: ubuntu-latest
+    # Three campaigns list every auth user and run a couple of queries per
+    # profile, plus one Gmail sync call capped at 2 minutes. Minutes, not hours.
+    timeout-minutes: 20
+
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      # Every link in every email is built from this, and the Gmail sync is
+      # POSTed to it. Not a secret.
+      NEXT_PUBLIC_APP_URL: https://autopilot.ahdahzeh.com
+      INGEST_RESULT: ${{ needs.ingest.result }}
+      DRY_RUN: ${{ inputs.emails_dry_run && '1' || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Send emails
+        run: npx tsx scripts/ingest/emails.ts
