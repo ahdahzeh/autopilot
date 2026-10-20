@@ -40,3 +40,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .env*.local
+
+# python
+__pycache__/
+*.pyc
+
+# supabase cli scratch
+supabase/.temp/
