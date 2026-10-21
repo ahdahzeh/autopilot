@@ -55,14 +55,16 @@ PAGE_SIZE = 20  # Workday rejects anything larger with HTTP 400
 # Searches per company. The Per Scholas profiles carry 6-8 titles with the
 # help-desk ones first and the security ones last; at a cap of 4 the first real
 # run (2026-10-20) never searched "SOC Analyst" or "Data Analyst" at all.
-# Budget check for the ingest runner (SOURCE_TIMEOUT_SECONDS=120, ~45 tenants):
-# 45 x 6 searches at ~1.1s each (request plus pacing) over 6 lanes is ~50s,
-# which leaves half the budget for the detail pass.
+# Budget check for the ingest runner (SOURCE_TIMEOUT_SECONDS=120, 129 career
+# sites after migration 019): 129 x 6 searches at ~1.1s each (request plus
+# pacing) over 16 lanes is ~55s, which leaves half the budget for the detail
+# pass. Tenants are shuffled per run, so when the deadline does bite it cuts a
+# different slice each day instead of starving the same employers.
 MAX_QUERIES = int(os.getenv("WORKDAY_MAX_QUERIES", "6"))
 MAX_PAGES = int(os.getenv("WORKDAY_MAX_PAGES", "1"))  # pages per search
 # Tenants fetched at once. Requests within a tenant stay sequential and paced,
 # so this only bounds our own egress, never the load on any one tenant.
-CONCURRENCY = 6
+CONCURRENCY = int(os.getenv("WORKDAY_CONCURRENCY", "16"))
 PACE_SECONDS = 0.3  # gap between consecutive requests to the same tenant
 TIMEOUT = httpx.Timeout(15.0, connect=8.0)
 
@@ -103,6 +105,8 @@ _STOP_WORDS = {
 # nothing: "IT Support Specialist" would otherwise pull in "Specialist, Product
 # Management" (Mastercard, first real run 2026-10-20). Only the title gate
 # ignores them; they stay in the search text, where Workday ANDs them in.
+# "analyst" stays a role word on purpose: CrowdStrike's SOC roles are titled
+# "Analyst I, Falcon Complete", which shares nothing else with "SOC Analyst".
 _GENERIC_ROLE_WORDS = {
     "specialist", "associate", "coordinator", "representative", "consultant",
     "professional", "officer", "assistant", "generalist",
@@ -179,6 +183,48 @@ def title_matches_queries(title: str, queries: list[str], titles: list[str]) -> 
 
 def _location_known(locations_text: str) -> bool:
     return bool(locations_text) and not _MULTI_LOCATION_RE.match(locations_text)
+
+
+# Workday location strings are whatever each employer typed into its own
+# tenant, and the NYC ones rarely say "New York, NY": Dow Jones posts "NYC - 1211
+# Ave of the Americas", DoubleVerify "NYC Global HQ", Barclays "New York, 745 7th
+# Avenue", NewYork-Presbyterian campus names ("NYP/Weill Cornell Medical
+# Center"), Montefiore bare Bronx street addresses and The New School building
+# letters (all from the 2026-10-21 survey of every tracked site). Users target
+# "New York" or "New York, NY", so those postings never matched. NYC_TAG is
+# appended (not substituted) so the employer's own wording stays visible.
+NYC_TAG = "New York, NY"
+_NYC_MARKERS = re.compile(
+    r"\bnyc\b|new york city|\bmanhattan\b|\bbrooklyn\b|\bbronx\b|\bqueens\b|"
+    r"staten island|long island city|new york,\s*\d",
+    re.I,
+)
+# NewYork-Presbyterian campuses outside the five boroughs.
+_NYP_OUTSIDE_NYC = re.compile(r"hudson valley|westchester|lawrence", re.I)
+# Montefiore's MMC site lists street addresses only; these streets are in the Bronx.
+_BRONX_STREETS = re.compile(
+    r"east \d+(st|nd|rd|th)? street|morris park|eastchester|bainbridge|grand concourse|"
+    r"waters place|tenbroeck|steuben|southern blvd|pelham",
+    re.I,
+)
+
+
+def tag_nyc(location: str, tenant: str = "") -> str:
+    """Append NYC_TAG to a Workday location that is in New York City but does not say so."""
+    loc = (location or "").strip()
+    if not loc or _MULTI_LOCATION_RE.match(loc) or NYC_TAG.lower() in loc.lower():
+        return loc
+    t = (tenant or "").lower()
+    in_nyc = bool(_NYC_MARKERS.search(loc))
+    if t == "nyp":
+        in_nyc = in_nyc or (
+            bool(re.search(r"nyp|gracie square", loc, re.I)) and not _NYP_OUTSIDE_NYC.search(loc)
+        )
+    elif t == "montefiore":
+        in_nyc = in_nyc or bool(_BRONX_STREETS.search(loc))
+    elif t == "newschool":
+        in_nyc = True  # every New School campus building is in Manhattan
+    return f"{loc} ({NYC_TAG})" if in_nyc else loc
 
 
 # Workday tenants are global, and their remote postings name the country:
@@ -305,6 +351,7 @@ def _to_listing(tenant: _Tenant, posting: dict, info: dict | None) -> JobListing
     if _MULTI_LOCATION_RE.match(location or ""):
         # Detail call failed or lacked locations: keep the hint rather than drop the job.
         location = posting.get("locationsText") or location
+    location = "; ".join(tag_nyc(part, tenant.tenant) for part in location.split("; ")) if location else location
     # Workday location strings often omit the country ("Bogota-Tinkko", "Remote").
     # The detail payload knows it; surface non-US countries so the remote check
     # and the reader both see where the job really is.
@@ -369,7 +416,7 @@ async def _search_company(
                 seen_paths.add(path)
                 if not title_matches_queries(title, queries, titles):
                     continue
-                loc_text = (p.get("locationsText") or "").strip()
+                loc_text = tag_nyc(p.get("locationsText") or "", tenant.tenant)
                 if _location_known(loc_text):
                     if not location_ok(loc_text, locations, is_remote_text(loc_text)):
                         continue
@@ -391,13 +438,23 @@ async def scrape(
     client: httpx.AsyncClient | None = None,
 ) -> list[JobListing]:
     tenants: list[_Tenant] = []
+    seen_sites: set[tuple[str, str]] = set()
     for c in companies or []:
         if (c.ats_type or "").lower() != "workday":
             continue
         try:
-            tenants.append(_Tenant(c))
+            t = _Tenant(c)
         except ValueError as e:
             logger.warning(f"workday: skipping {c.slug!r}: {e}")
+            continue
+        # src/lib/scrape.ts sends every active row, and a vertical pack copies
+        # global rows into the subscriber's own rows, so the same career site
+        # arrives once per subscriber. Search each site once per run.
+        key = (t.tenant.lower(), t.site.lower())
+        if key in seen_sites:
+            continue
+        seen_sites.add(key)
+        tenants.append(t)
     if not tenants:
         logger.info("workday: no tracked companies, skipping")
         return []

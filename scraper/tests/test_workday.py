@@ -415,6 +415,42 @@ def test_location_ok_drops_literal_remote_substring_outside_us():
     assert not workday.location_ok("Dubai, United Arab Emirates", ["New York", "Remote"], False)
 
 
+@pytest.mark.parametrize(
+    "location,tenant,tagged",
+    [
+        # Real locationsText values from the 2026-10-21 survey of every tracked site.
+        ("NYC - 1211 Ave of the Americas", "dowjones", True),
+        ("NYC Global HQ", "doubleverify", True),
+        ("New York, 745 7th Avenue", "barclays", True),
+        ("Brooklyn, New York", "etsy", True),
+        ("NYP/Weill Cornell Medical Center", "nyp", True),
+        ("Ambulatory NYP/CU", "nyp", True),
+        ("NYP/Hudson Valley", "nyp", False),
+        ("NYP/Westchester", "nyp", False),
+        ("111 East 210th Street", "montefiore", True),
+        ("1825 Eastchester Road", "montefiore", True),
+        ("555 Taxter Road", "montefiore", False),
+        ("A - 66 West 12th Street", "newschool", True),
+        ("New York, NY", "msk", False),  # already says it
+        ("Purchase, New York", "mastercard", False),  # New York State, not the city
+        ("2 Locations", "nyp", False),
+        ("London, 1 Churchill Place", "barclays", False),
+    ],
+)
+def test_tag_nyc(location, tenant, tagged):
+    out = workday.tag_nyc(location, tenant)
+    assert (out == f"{location} ({workday.NYC_TAG})") is tagged
+    if not tagged:
+        assert out == location
+
+
+def test_nyc_tag_lets_a_new_york_target_match_campus_names():
+    loc = workday.tag_nyc("NYP/Columbia University Irving Medical Center", "nyp")
+    assert workday.location_ok(loc, ["New York"], False)
+    assert workday.location_ok(loc, ["New York, NY"], False)
+    assert not workday.location_ok("NYP/Columbia University Irving Medical Center", ["New York"], False)
+
+
 def test_deadline_counts_down_and_clamps():
     d = Deadline(0)
     assert d.expired() and d.remaining() == 0.0 and d.clamp(15.0) == 0.1
@@ -485,6 +521,17 @@ def test_scrape_ignores_non_workday_companies_and_bad_slugs():
     jobs = run_scrape(rec, cos)
     assert {j.company for j in jobs} == {"Mastercard"}
     assert {t for t, _, _ in rec.searches} == {"mastercard"}
+
+
+def test_scrape_searches_a_site_once_when_rows_repeat():
+    # scrape.ts sends every active row and vertical packs copy global rows into
+    # each subscriber's own, so one career site can arrive several times.
+    once, twice = Recorder(), Recorder()
+    run_scrape(once, companies(MC))
+    run_scrape(twice, companies(MC) + companies(MC) + [
+        TargetCompany(ats_type="workday", slug="Mastercard/wd1/corporatecareers", name="Mastercard"),
+    ])
+    assert len(twice.searches) == len(once.searches) > 0
 
 
 def test_scrape_respects_limit():
