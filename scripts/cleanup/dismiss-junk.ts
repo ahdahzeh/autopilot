@@ -31,7 +31,10 @@ const DEFAULT_FLOOR = 3;
 const DEFAULT_SINCE = "2026-10-16";
 const DISMISS_REASON = "auto: low match quality";
 const PAGE_SIZE = 1000;
-const UPDATE_CHUNK = 200;
+// The ids travel in the PATCH URL (id=in.(...), commas and parens percent-
+// encoded, so ~39 bytes per uuid). 200 ids is ~7.9 KB, right at the 8 KB
+// request-line limit of the API gateway; 100 keeps a chunk near 4 KB.
+const UPDATE_CHUNK = 100;
 
 type JunkRow = { id: string; user_id: string; source: string; match_score: number | null };
 

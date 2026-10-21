@@ -78,8 +78,9 @@ SOURCE_TIMEOUTS = {
 # that is not "wrong role". Measured 2026-10-20 (read-only, all-time): of the
 # 750 Haiku-scored rows users have ever seen, 169 scored 0-2 and 3 of those
 # were acted on (applied or moved out of New), against 86 of the 581 scored
-# 3+: a 1.8% vs 14.8% action rate, and 3 of the 7 "not a fit" feedback rows
-# sit on score-2 jobs. In the 2026-10-16 window a floor of 3 drops 120 of the
+# 3+: a 1.8% vs 14.8% action rate, and 3 of the 7 negative-feedback rows (all
+# "wrong industry") sit on score-2 jobs; the one "not a fit" row is on a 3.
+# In the 2026-10-16 window a floor of 3 drops 120 of the
 # 369 Haiku-scored rows (33%: HiringCafe 58 of 58, BuiltIn 39, LinkedIn 12)
 # and keeps the 3-4 band (76 rows, 21%) that Haiku calls tangential and that
 # users do act on (21 all-time applies at 4). The daily cap is applied before
@@ -336,7 +337,11 @@ async def _scrape_inner(req: ScrapeRequest):
             return (source, [], f"timeout after {timeout}s")
         except Exception as e:
             elapsed = (datetime.now() - source_start).total_seconds()
-            logger.error(f"{source} scraper failed after {elapsed:.1f}s: {e}")
+            # Playwright errors append a call log with the page URL, and a
+            # search URL carries the user's titles and locations, so only the
+            # exception type and first line reach the public log at ERROR.
+            logger.error(f"{source} scraper failed after {elapsed:.1f}s: {linkedin.brief_error(e)}")
+            logger.debug(f"{source} scraper error detail: {e}")
             return (source, [], str(e))
 
     results = await asyncio.gather(*[_run_one(s) for s in req.sources], return_exceptions=False)
