@@ -41,11 +41,14 @@ const COHORT_LOCATIONS = ["New York, NY", "Remote"];
 const COHORT_SOURCES = ["hiringcafe", "builtin", "greenhouse", "lever", "ashby", "workday", "linkedin"];
 
 // The scraper drops a job when its title contains any of these as a
-// case-insensitive substring (JobListing.is_excluded_title). Entry-level
-// graduates should not see the senior tier of their own track.
+// case-insensitive substring, with no word boundaries
+// (JobListing.is_excluded_title in scraper/models.py). Entry-level graduates
+// should not see the senior tier of their own track, but every entry has to
+// be long enough not to swallow an entry-level title by accident: "vp" would
+// also match "VPN Support Technician", so it is spelled out.
 const ENTRY_LEVEL_EXCLUDED_TITLES = [
   "senior", "sr.", "lead", "principal", "staff", "manager",
-  "director", "head of", "chief", "vp", "architect",
+  "director", "head of", "chief", "vice president", "architect",
 ];
 
 // salary_floor stays 0 so entry-level roles are not hidden, and the daily

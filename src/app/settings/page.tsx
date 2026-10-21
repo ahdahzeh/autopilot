@@ -862,12 +862,22 @@ export default function SettingsPage() {
                 </select>
               </Field>
               {(() => {
+                // Exactly what the code will write onto a new member's
+                // profile, so the admin can check it before handing the link
+                // out. The lists are short enough to show in full.
                 const preset = getTrackPreset(newInvitePreset);
                 if (!preset) return null;
+                const sourceLabels = preset.profile.sources.map((id) => SOURCES.find((s) => s.id === id)?.label ?? id);
                 return (
-                  <p className="text-[10px] text-muted -mt-1">
-                    Prefills {preset.profile.target_titles.length} target titles ({preset.profile.target_titles.slice(0, 3).join(", ")} and {preset.profile.target_titles.length - 3} more), {preset.profile.target_locations.join(" and ")}, all {preset.profile.sources.length} job sources, {preset.profile.daily_job_limit} jobs a day, and hides senior titles.
-                  </p>
+                  <dl className="-mt-1 mb-3 px-3 py-2.5 rounded-lg border border-border bg-white text-[10px] space-y-1.5">
+                    <PresetRow label="Target roles" value={preset.profile.target_titles.join(", ")} />
+                    <PresetRow label="Locations" value={preset.profile.target_locations.join(", ")} />
+                    <PresetRow label="Min salary" value={preset.profile.salary_floor === 0 ? "Any" : `$${preset.profile.salary_floor.toLocaleString()}`} />
+                    <PresetRow label="Jobs per day" value={String(preset.profile.daily_job_limit)} />
+                    <PresetRow label="Sources" value={sourceLabels.join(", ")} />
+                    <PresetRow label="Focus industries" value={preset.profile.priority_industries.join(", ")} />
+                    <PresetRow label="Hidden titles" value={preset.profile.excluded_titles.join(", ")} />
+                  </dl>
                 );
               })()}
               {!newInvitePreset && (
@@ -1211,6 +1221,16 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <div className="mb-8">
       <h2 className="text-[10px] uppercase tracking-widest text-muted font-medium mb-3">{title}</h2>
       {children}
+    </div>
+  );
+}
+
+// One line of the track preset preview under the invite form.
+function PresetRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex gap-3">
+      <dt className="shrink-0 w-24 text-muted uppercase tracking-widest text-[9px] leading-4">{label}</dt>
+      <dd className="min-w-0 leading-4">{value}</dd>
     </div>
   );
 }

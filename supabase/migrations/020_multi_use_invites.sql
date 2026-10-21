@@ -340,7 +340,7 @@ begin
         "daily_job_limit": 20,
         "sources": ["hiringcafe", "builtin", "greenhouse", "lever", "ashby", "workday", "linkedin"],
         "priority_industries": ["Healthcare", "Hospitals and health systems", "Health IT", "Managed IT services"],
-        "excluded_titles": ["senior", "sr.", "lead", "principal", "staff", "manager", "director", "head of", "chief", "vp", "architect"]
+        "excluded_titles": ["senior", "sr.", "lead", "principal", "staff", "manager", "director", "head of", "chief", "vice president", "architect"]
       }'::jsonb
     ),
     (
@@ -357,7 +357,7 @@ begin
         "daily_job_limit": 20,
         "sources": ["hiringcafe", "builtin", "greenhouse", "lever", "ashby", "workday", "linkedin"],
         "priority_industries": ["Cybersecurity", "Financial services", "Healthcare", "Managed security services", "Government and public sector"],
-        "excluded_titles": ["senior", "sr.", "lead", "principal", "staff", "manager", "director", "head of", "chief", "vp", "architect"]
+        "excluded_titles": ["senior", "sr.", "lead", "principal", "staff", "manager", "director", "head of", "chief", "vice president", "architect"]
       }'::jsonb
     ),
     (
@@ -374,7 +374,7 @@ begin
         "daily_job_limit": 20,
         "sources": ["hiringcafe", "builtin", "greenhouse", "lever", "ashby", "workday", "linkedin"],
         "priority_industries": ["Financial services", "Healthcare", "Retail and e-commerce", "Media", "Technology"],
-        "excluded_titles": ["senior", "sr.", "lead", "principal", "staff", "manager", "director", "head of", "chief", "vp", "architect"]
+        "excluded_titles": ["senior", "sr.", "lead", "principal", "staff", "manager", "director", "head of", "chief", "vice president", "architect"]
       }'::jsonb
     )
   on conflict (code) do nothing;

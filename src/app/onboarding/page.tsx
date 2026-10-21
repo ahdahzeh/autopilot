@@ -74,15 +74,16 @@ function visibleStepKeys(prefilledFields: string[]): StepKey[] {
 type InviteInfo = { code: string; label: string | null; prefilledFields: string[] };
 
 // Plain-English list of what the invite filled in, for the welcome copy.
+// Names each skipped step by what the member would have typed there.
 function describePrefilled(fields: string[]): string {
   const parts: string[] = [];
   if (fields.includes("target_titles")) parts.push("target roles");
   if (fields.includes("target_locations")) parts.push("locations");
-  if (fields.includes("sources")) parts.push("job sources");
   if (fields.includes("salary_floor") || fields.includes("daily_job_limit")) parts.push("pipeline preferences");
+  if (fields.includes("sources")) parts.push("job sources");
+  if (fields.includes("priority_industries")) parts.push("focus areas");
   if (parts.length === 0) return "preferences";
-  if (parts.length === 1) return parts[0];
-  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(parts);
 }
 
 export default function OnboardingPage() {
@@ -717,7 +718,7 @@ export default function OnboardingPage() {
         <div>
           <h2 className="text-sm font-bold">Connect Gmail (optional)</h2>
           <p className="text-[10px] text-muted mt-1">
-            Optional. When connected, your pipeline updates itself as interview requests, rejections and offers land in your inbox. Google caps how many accounts this app can connect, so if connecting fails, skip it and try again later from Settings.
+            When connected, your pipeline updates itself as interview requests, rejections and offers land in your inbox. Google caps how many accounts this app can connect, so if connecting fails, skip it for now and connect later from Settings.
           </p>
         </div>
         {gmailConnected ? (
