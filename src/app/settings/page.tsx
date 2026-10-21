@@ -5,19 +5,24 @@ import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { ResumeUpload } from "@/components/resume-upload";
 import { TONES, MODELS, type Tone, type ModelChoice } from "@/lib/tailor-prompts";
+import { TRACK_PRESET_LIST, getTrackPreset } from "@/lib/track-presets";
 
-// LinkedIn last — the scraper processes sources in order, and LinkedIn
-// is the slowest / most throttled. Keep fast sources up front.
+// Only sources with a scraper module. Bandana and Welcome-to-the-Jungle were
+// retired but kept appearing in profile.sources, burning ~25% of each user's
+// source budget on "unknown source" no-ops, so they are no longer offered and
+// handleSave sweeps them out. Workday joined in 2026-10 (employers live in
+// target_companies with ats_type = 'workday'). LinkedIn last: the scraper
+// processes sources in order, and LinkedIn is the slowest / most throttled.
 const SOURCES = [
   { id: "hiringcafe", label: "Hiring Cafe" },
   { id: "builtin", label: "BuiltIn" },
-  { id: "bandana", label: "Bandana" },
-  { id: "welcometothejungle", label: "Welcome to the Jungle" },
   { id: "greenhouse", label: "Greenhouse (ATS)" },
   { id: "lever", label: "Lever (ATS)" },
   { id: "ashby", label: "Ashby (ATS)" },
+  { id: "workday", label: "Company career sites (Workday)" },
   { id: "linkedin", label: "LinkedIn" },
 ];
+const SOURCE_IDS = new Set(SOURCES.map((s) => s.id));
 
 const ATS_SOURCE_IDS = new Set(["greenhouse", "lever", "ashby"]);
 
@@ -32,6 +37,9 @@ type TrackedCompany = {
 
 const DAILY_LIMITS = [10, 20, 30];
 
+// Since migration 020 a code carries a seat count (max_uses / use_count), a
+// label shown to whoever signs up with it, and an active flag so a code can
+// be closed early. used_by survives for single-use codes only.
 type InviteCode = {
   id: string;
   code: string;
@@ -39,7 +47,18 @@ type InviteCode = {
   prefilled_profile: Record<string, unknown> | null;
   expires_at: string;
   created_at: string;
+  label: string;
+  max_uses: number;
+  use_count: number;
+  active: boolean;
 };
+
+// Default expiry for a new code: 30 days out, as YYYY-MM-DD for the date input.
+function defaultInviteExpiry(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 30);
+  return d.toISOString().slice(0, 10);
+}
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -86,9 +105,16 @@ export default function SettingsPage() {
 
   // Invite codes
   const [inviteCodes, setInviteCodes] = useState<InviteCode[]>([]);
+  const [newInviteLabel, setNewInviteLabel] = useState("");
+  const [newInviteMaxUses, setNewInviteMaxUses] = useState(1);
+  const [newInviteExpires, setNewInviteExpires] = useState(defaultInviteExpiry);
+  // "" means no preset: the custom titles/locations fields apply instead.
+  const [newInvitePreset, setNewInvitePreset] = useState("");
   const [newInviteTitles, setNewInviteTitles] = useState("");
   const [newInviteLocations, setNewInviteLocations] = useState("");
   const [creatingInvite, setCreatingInvite] = useState(false);
+  const [inviteError, setInviteError] = useState("");
+  const [copiedInviteCode, setCopiedInviteCode] = useState("");
 
   // Tracked companies (Greenhouse / Lever / Ashby)
   const [companies, setCompanies] = useState<TrackedCompany[]>([]);
@@ -228,7 +254,8 @@ export default function SettingsPage() {
         target_titles: titles.split(",").map((t) => t.trim()).filter(Boolean),
         target_locations: locations.split(",").map((l) => l.trim()).filter(Boolean),
         salary_floor: salaryFloor,
-        sources,
+        // Drop retired sources the profile may still carry (see SOURCES).
+        sources: sources.filter((s) => SOURCE_IDS.has(s)),
         daily_job_limit: dailyLimit,
         excluded_companies: excludedCompanies.split(",").map((c) => c.trim()).filter(Boolean),
         excluded_titles: excludedTitles.split(",").map((t) => t.trim()).filter(Boolean),
@@ -346,35 +373,101 @@ export default function SettingsPage() {
 
   async function createInviteCode() {
     setCreatingInvite(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    setInviteError("");
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const prefill: Record<string, unknown> = {};
-    if (newInviteTitles.trim()) {
-      prefill.target_titles = newInviteTitles.split(",").map((t) => t.trim()).filter(Boolean);
+      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+      // A track preset answers the whole targeting half of onboarding for
+      // whoever redeems the code (see src/lib/track-presets.ts). Without one,
+      // the optional titles/locations below are the only prefill.
+      const preset = getTrackPreset(newInvitePreset);
+      let prefill: Record<string, unknown> | null = null;
+      if (preset) {
+        prefill = { ...preset.profile };
+      } else {
+        const custom: Record<string, unknown> = {};
+        if (newInviteTitles.trim()) {
+          custom.target_titles = newInviteTitles.split(",").map((t) => t.trim()).filter(Boolean);
+        }
+        if (newInviteLocations.trim()) {
+          custom.target_locations = newInviteLocations.split(",").map((l) => l.trim()).filter(Boolean);
+        }
+        prefill = Object.keys(custom).length > 0 ? custom : null;
+      }
+
+      // The date input gives a calendar day; the code stays valid through
+      // the end of that day in the admin's timezone.
+      const expires = new Date(`${newInviteExpires}T23:59:59`);
+      if (Number.isNaN(expires.getTime()) || expires.getTime() <= Date.now()) {
+        setInviteError("Choose an expiry date after today");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("invite_codes")
+        .insert({
+          code,
+          created_by: user.id,
+          label: newInviteLabel.trim() || preset?.label || "",
+          max_uses: Math.max(1, Math.floor(newInviteMaxUses) || 1),
+          expires_at: expires.toISOString(),
+          prefilled_profile: prefill,
+        })
+        .select()
+        .single();
+
+      if (error || !data) {
+        setInviteError(error?.message || "Could not create the code. Try again.");
+        return;
+      }
+
+      setInviteCodes((prev) => [data as InviteCode, ...prev]);
+      setNewInviteLabel("");
+      setNewInviteMaxUses(1);
+      setNewInviteExpires(defaultInviteExpiry());
+      setNewInvitePreset("");
+      setNewInviteTitles("");
+      setNewInviteLocations("");
+    } finally {
+      setCreatingInvite(false);
     }
-    if (newInviteLocations.trim()) {
-      prefill.target_locations = newInviteLocations.split(",").map((l) => l.trim()).filter(Boolean);
+  }
+
+  // Deactivate a code early (or reactivate it). Redemptions check `active`,
+  // so a deactivated code is refused immediately even with seats left.
+  async function setInviteActive(ic: InviteCode, active: boolean) {
+    setInviteError("");
+    const prev = inviteCodes;
+    setInviteCodes((codes) => codes.map((c) => (c.id === ic.id ? { ...c, active } : c)));
+    const { error } = await supabase.from("invite_codes").update({ active }).eq("id", ic.id);
+    if (error) {
+      setInviteCodes(prev);
+      setInviteError(error.message || "Could not update the code. Try again.");
     }
+  }
 
-    const { data } = await supabase
-      .from("invite_codes")
-      .insert({
-        code,
-        created_by: user.id,
-        prefilled_profile: Object.keys(prefill).length > 0 ? prefill : null,
-      })
-      .select()
-      .single();
-
-    if (data) {
-      setInviteCodes((prev) => [data, ...prev]);
+  // The link cohort members get: signup with the code already filled in.
+  async function copyInviteLink(code: string) {
+    const link = `${window.location.origin}/signup?code=${encodeURIComponent(code)}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedInviteCode(code);
+      setTimeout(() => setCopiedInviteCode(""), 2000);
+    } catch {
+      // Clipboard access can be denied (insecure context, permissions).
+      // Fall back to the browser's own prompt so the link is still readable.
+      window.prompt("Copy this signup link", link);
     }
+  }
 
-    setNewInviteTitles("");
-    setNewInviteLocations("");
-    setCreatingInvite(false);
+  function inviteStatus(ic: InviteCode): { text: string; tone: "ok" | "muted" | "danger" } {
+    if (!ic.active) return { text: "Inactive", tone: "muted" };
+    if (new Date(ic.expires_at) < new Date()) return { text: "Expired", tone: "danger" };
+    if (ic.use_count >= ic.max_uses) return { text: ic.max_uses === 1 ? "Used" : "Full", tone: "ok" };
+    return { text: `Expires ${new Date(ic.expires_at).toLocaleDateString()}`, tone: "muted" };
   }
 
   if (loading) {
@@ -413,6 +506,9 @@ export default function SettingsPage() {
                 Admin
               </a>
             )}
+            <a href="/settings/billing" className="cb-btn" title="Tailoring credits">
+              Tailoring credits
+            </a>
             <button onClick={() => router.push("/")} className="cb-btn">
               ← Back
             </button>
@@ -720,58 +816,154 @@ export default function SettingsPage() {
           <Section title="Invite Codes">
             <div className="bg-card border border-border rounded-xl p-4 space-y-4 mb-4">
               <p className="text-[10px] text-muted">
-                Create invite codes for family members. Optionally prefill their job preferences.
+                One code can cover one person or a whole cohort. Pick a track preset to fill in target roles, locations, job sources and entry-level filters, so whoever uses the code only has to upload a resume. Copy the signup link and the code is already filled in.
               </p>
-              <Field label="Prefill Roles" hint="Optional, comma-separated">
+              <Field label="Label" hint="Shown to whoever signs up with the code">
                 <input
                   type="text"
-                  value={newInviteTitles}
-                  onChange={(e) => setNewInviteTitles(e.target.value)}
-                  placeholder="e.g. Nurse, RN"
+                  value={newInviteLabel}
+                  onChange={(e) => setNewInviteLabel(e.target.value)}
+                  placeholder="e.g. Per Scholas NY, spring cohort"
                   className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
                 />
               </Field>
-              <Field label="Prefill Locations" hint="Optional, comma-separated">
-                <input
-                  type="text"
-                  value={newInviteLocations}
-                  onChange={(e) => setNewInviteLocations(e.target.value)}
-                  placeholder="e.g. New York, Remote"
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Seats" hint="How many people can use it">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={newInviteMaxUses}
+                    onChange={(e) => setNewInviteMaxUses(Number(e.target.value))}
+                    className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white mono focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
+                  />
+                </Field>
+                <Field label="Expires">
+                  <input
+                    type="date"
+                    value={newInviteExpires}
+                    onChange={(e) => setNewInviteExpires(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white mono focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
+                  />
+                </Field>
+              </div>
+              <Field label="Track Preset" hint="Optional">
+                <select
+                  value={newInvitePreset}
+                  onChange={(e) => setNewInvitePreset(e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
-                />
+                >
+                  <option value="">No preset (prefill roles and locations below)</option>
+                  {TRACK_PRESET_LIST.map((p) => (
+                    <option key={p.code} value={p.code}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
               </Field>
-              <button onClick={createInviteCode} disabled={creatingInvite} className="cb-btn cb-btn--solid">
-                {creatingInvite ? "Creating" : "Generate code"}
-              </button>
+              {(() => {
+                const preset = getTrackPreset(newInvitePreset);
+                if (!preset) return null;
+                return (
+                  <p className="text-[10px] text-muted -mt-1">
+                    Prefills {preset.profile.target_titles.length} target titles ({preset.profile.target_titles.slice(0, 3).join(", ")} and {preset.profile.target_titles.length - 3} more), {preset.profile.target_locations.join(" and ")}, all {preset.profile.sources.length} job sources, {preset.profile.daily_job_limit} jobs a day, and hides senior titles.
+                  </p>
+                );
+              })()}
+              {!newInvitePreset && (
+                <>
+                  <Field label="Prefill Roles" hint="Optional, comma-separated">
+                    <input
+                      type="text"
+                      value={newInviteTitles}
+                      onChange={(e) => setNewInviteTitles(e.target.value)}
+                      placeholder="e.g. Nurse, RN"
+                      className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
+                    />
+                  </Field>
+                  <Field label="Prefill Locations" hint="Optional, comma-separated">
+                    <input
+                      type="text"
+                      value={newInviteLocations}
+                      onChange={(e) => setNewInviteLocations(e.target.value)}
+                      placeholder="e.g. New York, Remote"
+                      className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30"
+                    />
+                  </Field>
+                </>
+              )}
+              <div className="flex items-center gap-3">
+                <button onClick={createInviteCode} disabled={creatingInvite} className="cb-btn cb-btn--solid">
+                  {creatingInvite ? "Creating" : "Generate code"}
+                </button>
+                {inviteError && (
+                  <span className="mono text-[10px] uppercase tracking-widest" style={{ color: "var(--danger)" }}>
+                    {inviteError}
+                  </span>
+                )}
+              </div>
             </div>
 
-            {inviteCodes.length > 0 && (
+            {inviteCodes.length > 0 ? (
               <div className="space-y-2">
-                {inviteCodes.map((ic) => (
-                  <div
-                    key={ic.id}
-                    className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 px-4 py-3 border border-border rounded-xl bg-card"
-                  >
-                    <div>
-                      <span className="mono text-sm font-bold tracking-wider">{ic.code}</span>
-                      {ic.prefilled_profile && (
-                        <span className="text-[9px] text-muted ml-2">
-                          (prefilled)
-                        </span>
-                      )}
+                {inviteCodes.map((ic) => {
+                  const status = inviteStatus(ic);
+                  const preset = getTrackPreset(ic.code) ?? (ic.prefilled_profile ? TRACK_PRESET_LIST.find((p) => p.label === ic.label) : undefined);
+                  return (
+                    <div
+                      key={ic.id}
+                      className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 px-4 py-3 border border-border rounded-xl bg-card"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="mono text-sm font-bold tracking-wider">{ic.code}</span>
+                          {ic.label && <span className="text-xs text-foreground truncate">{ic.label}</span>}
+                          {preset ? (
+                            <span className="mono text-[8px] uppercase tracking-widest px-1.5 py-0.5 rounded border border-border text-muted">
+                              Track preset
+                            </span>
+                          ) : ic.prefilled_profile ? (
+                            <span className="mono text-[8px] uppercase tracking-widest px-1.5 py-0.5 rounded border border-border text-muted">
+                              Prefilled
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="text-[9px] mono text-muted uppercase tracking-widest mt-1">
+                          <span className="tabular-nums">{ic.use_count} / {ic.max_uses}</span> used
+                          <span className="mx-1.5">·</span>
+                          <span
+                            style={{
+                              color:
+                                status.tone === "danger" ? "var(--danger)" :
+                                status.tone === "ok" ? "var(--success)" : undefined,
+                            }}
+                          >
+                            {status.text}
+                          </span>
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => copyInviteLink(ic.code)}
+                          className="text-[10px] mono uppercase tracking-widest text-muted hover:text-foreground transition-colors"
+                        >
+                          {copiedInviteCode === ic.code ? "Copied" : "Copy link"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInviteActive(ic, !ic.active)}
+                          className="text-[10px] mono uppercase tracking-widest text-muted hover:text-accent-red transition-colors"
+                        >
+                          {ic.active ? "Deactivate" : "Reactivate"}
+                        </button>
+                      </div>
                     </div>
-                    <div className="text-[9px] mono text-muted">
-                      {ic.used_by ? (
-                        <span className="text-accent-green">Used</span>
-                      ) : new Date(ic.expires_at) < new Date() ? (
-                        <span className="text-accent-red">Expired</span>
-                      ) : (
-                        <span>Expires {new Date(ic.expires_at).toLocaleDateString()}</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
+            ) : (
+              <p className="text-[10px] text-muted">No codes yet. Generate one above and share its signup link.</p>
             )}
           </Section>
         )}
