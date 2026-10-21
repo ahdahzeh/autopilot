@@ -21,12 +21,11 @@
  *   NEXT_PUBLIC_SUPABASE_URL     required, createServiceClient() in src/lib/supabase/server.ts
  *   SUPABASE_SERVICE_ROLE_KEY    required, same
  *   RESEND_API_KEY               required unless DRY_RUN=1; sendEmail() in src/lib/emails.ts
- *   NEXT_PUBLIC_APP_URL          links in every email (src/lib/emails.ts, email-campaigns.ts)
- *                                and the Gmail sync target; defaults to
- *                                https://autopilot.ahdahzeh.com like the lib does
- *   CRON_SECRET                  optional; bearer token for the Gmail sync, must equal the
- *                                Vercel env var of the same name. The sync is attempted
- *                                without it, since the site only checks it when it has one.
+ *   NEXT_PUBLIC_APP_URL          links in every email (src/lib/emails.ts, email-campaigns.ts);
+ *                                defaults to https://autopilot.ahdahzeh.com like the lib does
+ *   GOOGLE_CLIENT_ID             optional; with GOOGLE_CLIENT_SECRET, lets the Gmail sync refresh
+ *   GOOGLE_CLIENT_SECRET         expired tokens (src/lib/gmail-sync.ts). Without both the sync
+ *                                is skipped and says so; the campaigns still run.
  *   NEXT_PUBLIC_SENTRY_DSN       optional; captureError() in src/lib/sentry.ts falls back to
  *                                console.error without it (and @sentry/nextjs is not installed)
  *   INGEST_RESULT                optional; the workflow passes needs.ingest.result for the summary
@@ -44,6 +43,8 @@ import { createHash } from "node:crypto";
 import { format } from "node:util";
 
 const DRY_RUN = process.env.DRY_RUN === "1";
+// Per user. The sync lib has no timeout of its own, and one hung Google call
+// must not hold the digest.
 const GMAIL_SYNC_TIMEOUT_MS = 120_000;
 
 // ─── Public-log redaction ───────────────────────────────────────────────────
@@ -78,37 +79,66 @@ function installLogFilter(): void {
 // ─── Gmail sync (what the cron route did between the scrape loop and the emails) ──
 
 /**
- * The cron route ran the live site's Gmail sync before the campaigns so the
- * digest saw fresh application statuses; this keeps that order. The sync route
- * only enforces CRON_SECRET when the Vercel env var is set (it was not on
- * 2026-10-20), so the call goes out either way: without a token it is a 200
- * where Vercel has no secret, and a 401 that names the missing repository
- * secret where it has one. Best effort, like the route: a failed sync is a
- * log line, not a red job, because the digest still has yesterday's statuses.
+ * Application statuses are refreshed before the digest so it describes where
+ * each application actually stands. The cron route used to do this by POSTing
+ * to the live site's own /api/gmail/sync with CRON_SECRET as a bearer token.
+ * That request never reached the route: src/proxy.ts redirects every
+ * cookie-less request outside its public list to /login, and /api/gmail/sync
+ * is not on that list (confirmed 2026-10-20 by calling proxy() with such a
+ * request: 307 to /login). So the sync runs in-process here, the way
+ * src/app/api/admin/actions/route.ts does it, with the same service client
+ * the campaigns use.
+ *
+ * Refreshing a user's Google token needs the OAuth client, so without
+ * GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET the sync is skipped and says so,
+ * rather than marking every user "no valid token". Best effort either way: a
+ * failed sync is a log line, not a red job, because the digest still has
+ * yesterday's statuses.
  */
-async function syncGmail(appUrl: string): Promise<string> {
-  // The sync writes application statuses to profiles and jobs.
+async function syncGmail(): Promise<string> {
+  // The sync writes application statuses to jobs and refreshed tokens to gmail_tokens.
   if (DRY_RUN) return "skipped: DRY_RUN";
-  const secret = process.env.CRON_SECRET;
-  const token = secret ? "with CRON_SECRET" : "without CRON_SECRET";
-  try {
-    const res = await fetch(`${appUrl}/api/gmail/sync`, {
-      method: "POST",
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-      signal: AbortSignal.timeout(GMAIL_SYNC_TIMEOUT_MS),
-    });
-    if (res.status === 401) {
-      return secret
-        ? `failed: HTTP 401 ${token} (the repository secret does not match Vercel's CRON_SECRET)`
-        : `failed: HTTP 401 ${token} (add a CRON_SECRET repository secret equal to Vercel's)`;
-    }
-    if (!res.ok) return `failed: HTTP ${res.status} ${token}`;
-    // The body also carries per-user results keyed by user id; only the count is worth printing.
-    const data = (await res.json().catch(() => ({}))) as { processed?: number };
-    return `ok: ${data.processed ?? 0} users ${token}`;
-  } catch (err) {
-    return `failed: ${err instanceof Error ? err.message : String(err)} ${token}`;
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    return "skipped: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not set (add both repository secrets to refresh application statuses before the digest)";
   }
+  const { createServiceClient } = await import("../../src/lib/supabase/server");
+  const { syncUserGmail } = await import("../../src/lib/gmail-sync");
+  const svc = createServiceClient();
+  const { data: users, error } = await svc
+    .from("profiles")
+    .select("id")
+    .eq("gmail_connected", true)
+    .eq("onboarded", true);
+  if (error) return `failed: could not load users: ${error.message}`;
+  const ids = (users ?? []).map((u) => u.id as string);
+
+  // All users at once, as the sync route did. One user's hang or throw must
+  // not stall the digest, so each sync gets GMAIL_SYNC_TIMEOUT_MS and the lot
+  // is settled rather than awaited.
+  const settled = await Promise.allSettled(
+    ids.map((id) => withTimeout(syncUserGmail(svc, id), GMAIL_SYNC_TIMEOUT_MS)),
+  );
+  let synced = 0;
+  let skipped = 0;
+  let failed = 0;
+  let updated = 0;
+  for (const r of settled) {
+    if (r.status === "rejected" || r.value.error) failed += 1;
+    else if (r.value.skipped) skipped += 1;
+    else {
+      synced += 1;
+      updated += r.value.updated ?? 0;
+    }
+  }
+  return `ok: ${ids.length} users, ${synced} synced (${updated} statuses updated), ${skipped} skipped (no valid token), ${failed} failed`;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 // ─── Campaigns ──────────────────────────────────────────────────────────────
@@ -186,7 +216,7 @@ async function main(): Promise<void> {
   if (process.env.INGEST_RESULT) console.log(`emails: ingest result was "${process.env.INGEST_RESULT}"`);
   console.log(`emails: links point at ${appUrl}`);
 
-  console.log(`gmail sync: ${await syncGmail(appUrl)}`);
+  console.log(`gmail sync: ${await syncGmail()}`);
 
   const outcomes = [
     await runCampaign("onboarding reminders", processOnboardingReminders),

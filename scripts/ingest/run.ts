@@ -149,6 +149,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
+  // Same public log as above: a Supabase or scraper error message is the one
+  // place an id could still ride in, so it goes through the same filter.
+  console.error(redactIds(err instanceof Error ? err.message : String(err)));
   process.exit(1);
 });

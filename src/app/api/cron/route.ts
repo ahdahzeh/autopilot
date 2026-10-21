@@ -1,3 +1,5 @@
+import { createServiceClient } from "@/lib/supabase/server";
+import { syncUserGmail } from "@/lib/gmail-sync";
 import { processOnboardingReminders, processEngagementEmails, processDailyDigest } from "@/lib/email-campaigns";
 
 // Manual trigger for the daily emails. Nothing schedules this route any more.
@@ -34,18 +36,28 @@ export async function GET(request: Request) {
   }
 
   // Gmail sync first, so application statuses are fresh before any email goes
-  // out. Internal fetch back to our own sync endpoint, same as the emails job.
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://autopilot.ahdahzeh.com").replace(/\/+$/, "");
-  let gmailSync: string;
-  try {
-    const res = await fetch(`${appUrl}/api/gmail/sync`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${secret}` },
-    });
-    gmailSync = res.ok ? "ok" : `HTTP ${res.status}`;
-  } catch (err) {
-    console.error("Gmail sync failed:", err);
-    gmailSync = `failed: ${err instanceof Error ? err.message : String(err)}`;
+  // out. In-process, the way the admin actions route does it, and the same as
+  // the emails job. This used to be a fetch back to our own /api/gmail/sync,
+  // which src/proxy.ts redirected to /login every time: the request carried no
+  // session cookie and that path is not on the proxy's public list, so the
+  // daily sync had never actually run (confirmed 2026-10-20).
+  const svc = createServiceClient();
+  const { data: gmailUsers, error: gmailError } = await svc
+    .from("profiles")
+    .select("id")
+    .eq("gmail_connected", true)
+    .eq("onboarded", true);
+  let gmailSync: Record<string, unknown>;
+  if (gmailError) {
+    gmailSync = { error: gmailError.message };
+  } else {
+    const settled = await Promise.allSettled((gmailUsers ?? []).map((u) => syncUserGmail(svc, u.id)));
+    gmailSync = {
+      users: settled.length,
+      synced: settled.filter((r) => r.status === "fulfilled" && !r.value.error && !r.value.skipped).length,
+      skipped: settled.filter((r) => r.status === "fulfilled" && r.value.skipped).length,
+      failed: settled.filter((r) => r.status === "rejected" || r.value.error).length,
+    };
   }
 
   // Onboarding reminders for stuck users, engagement nudges for active users,

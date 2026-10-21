@@ -24,11 +24,11 @@
 # Optional:
 #   ANTHROPIC_API_KEY  - enables Haiku rescoring. Without it the scraper falls
 #                        back to heuristic scores and the run costs nothing.
-#   CRON_SECRET        - bearer token for the Gmail sync call to the live site
-#                        before the digest. Must equal the Vercel env var of
-#                        the same name. The sync is attempted without it, since
-#                        the site only checks the token when it has one; a 401
-#                        in the log means the two are out of step.
+#   GOOGLE_CLIENT_ID   - with GOOGLE_CLIENT_SECRET, lets the emails job refresh
+#   GOOGLE_CLIENT_SECRET each user's Gmail token and sync application statuses
+#                        before the digest. Same values as the Vercel env vars
+#                        of the same name. Without both, the sync is skipped
+#                        and the log says so; the emails still go out.
 #
 # The repo is public, so these logs are. Neither script prints a user id, an
 # email address or a job title; users appear as 8-character hashes.
@@ -199,11 +199,13 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-      # Empty when the secret is missing; emails.ts then calls the sync
-      # without a token and reports the HTTP status it got.
-      CRON_SECRET: ${{ secrets.CRON_SECRET }}
-      # Every link in every email is built from this, and the Gmail sync is
-      # POSTed to it. Not a secret.
+      # Both empty when the secrets are missing; emails.ts then skips the
+      # Gmail sync and says so. The sync runs in-process (src/lib/gmail-sync.ts)
+      # because the site's proxy redirects any cookie-less call to the sync
+      # route to /login, so there is no bearer token to pass.
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      # Every link in every email is built from this. Not a secret.
       NEXT_PUBLIC_APP_URL: https://autopilot.ahdahzeh.com
       INGEST_RESULT: ${{ needs.ingest.result }}
       DRY_RUN: ${{ inputs.emails_dry_run && '1' || '' }}
