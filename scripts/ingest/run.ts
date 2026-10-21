@@ -57,22 +57,27 @@ function shardOf(id: string, total: number): number {
 }
 
 /**
- * SHARD_INDEX / SHARD_TOTAL from the environment. Both default so a plain
- * `npx tsx scripts/ingest/run.ts` still scrapes everyone, and both are checked
+ * SHARD_INDEX / SHARD_TOTAL from the environment. With neither set, a plain
+ * `npx tsx scripts/ingest/run.ts` scrapes everyone. Set, they are checked
  * strictly: a typo like SHARD_TOTAL=4 with SHARD_INDEX=4 would silently scrape
- * nobody, and that is exactly the failure that must not go green. Digits only,
- * because Number("") is 0 and Number("1e0") is 1, and either would quietly
- * pick a shard nobody asked for.
+ * nobody, SHARD_TOTAL=4 on its own would quietly scrape a quarter of the users
+ * as shard 0, and either is exactly the failure that must not go green. Digits
+ * only, because Number("") is 0 and Number("1e0") is 1, and both would pick a
+ * shard nobody asked for.
  */
 function shardConfig(): { index: number; total: number } {
-  const rawTotal = process.env.SHARD_TOTAL ?? "1";
-  const rawIndex = process.env.SHARD_INDEX ?? "0";
+  const rawTotal = process.env.SHARD_TOTAL;
+  const rawIndex = process.env.SHARD_INDEX;
+  if (rawTotal === undefined && rawIndex === undefined) return { index: 0, total: 1 };
+  if (rawTotal === undefined || rawIndex === undefined) {
+    throw new Error("SHARD_INDEX and SHARD_TOTAL must be set together (or neither, to scrape everyone)");
+  }
   if (!/^\d+$/.test(rawTotal) || Number(rawTotal) < 1) {
-    throw new Error(`SHARD_TOTAL must be a positive integer, got "${process.env.SHARD_TOTAL}"`);
+    throw new Error(`SHARD_TOTAL must be a positive integer, got "${rawTotal}"`);
   }
   const total = Number(rawTotal);
   if (!/^\d+$/.test(rawIndex) || Number(rawIndex) >= total) {
-    throw new Error(`SHARD_INDEX must be an integer from 0 to ${total - 1}, got "${process.env.SHARD_INDEX}"`);
+    throw new Error(`SHARD_INDEX must be an integer from 0 to ${total - 1}, got "${rawIndex}"`);
   }
   return { index: Number(rawIndex), total };
 }

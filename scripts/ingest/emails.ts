@@ -19,7 +19,9 @@
  *
  * Environment (every variable the campaign code path reads):
  *   NEXT_PUBLIC_SUPABASE_URL     required, createServiceClient() in src/lib/supabase/server.ts
- *   SUPABASE_SERVICE_ROLE_KEY    required, same
+ *   SUPABASE_SERVICE_ROLE_KEY    required, same. (NEXT_PUBLIC_SUPABASE_ANON_KEY is not needed:
+ *                                only the cookie-based createClient() reads it, and nothing
+ *                                here calls that.)
  *   RESEND_API_KEY               required unless DRY_RUN=1; sendEmail() in src/lib/emails.ts
  *   NEXT_PUBLIC_APP_URL          links in every email (src/lib/emails.ts, email-campaigns.ts);
  *                                defaults to https://autopilot.ahdahzeh.com like the lib does
@@ -29,7 +31,10 @@
  *   NEXT_PUBLIC_SENTRY_DSN       optional; captureError() in src/lib/sentry.ts falls back to
  *                                console.error without it (and @sentry/nextjs is not installed)
  *   INGEST_RESULT                optional; the workflow passes needs.ingest.result for the summary
- *   DRY_RUN=1                    see main()
+ *   DRY_RUN=1                    two layers, see main() and installDryRunNetworkGuard(): the
+ *                                Resend key is removed so sendEmail() returns before the network
+ *                                and every campaign skips its profiles.update(), and the global
+ *                                fetch refuses anything but GET/HEAD to the Supabase host
  *
  * The Actions log is public, because the repo is. Every console call is
  * filtered before it reaches stdout: email addresses and user ids become
@@ -74,6 +79,48 @@ function installLogFilter(): void {
     const original = console[level].bind(console);
     console[level] = (...args: unknown[]) => original(redact(format(...args)));
   }
+}
+
+// ─── DRY_RUN network guard ──────────────────────────────────────────────────
+
+/**
+ * DRY_RUN's second layer. The first (main() unsetting RESEND_API_KEY) relies
+ * on sendEmail() returning early without a key and on every campaign skipping
+ * its profiles.update() when a send fails. Both hold today, and both live in
+ * files other people edit, so the dry run also refuses at the network: any
+ * fetch that is not a GET or HEAD to the Supabase host throws before a byte is
+ * sent. That covers a PATCH to profiles, a POST to api.resend.com and a token
+ * refresh at oauth2.googleapis.com alike. supabase-js and auth-js both resolve
+ * the global fetch per call (resolveFetch: `(...args) => fetch(...args)`), so
+ * the wrapper installed here is the one every Supabase query goes through.
+ */
+function installDryRunNetworkGuard(supabaseUrl: string): void {
+  const allowedHost = new URL(supabaseUrl).host;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+    if (url.host !== allowedHost || (method !== "GET" && method !== "HEAD")) {
+      // Host and path only: a PostgREST query string can carry a user id.
+      throw new Error(`DRY_RUN blocked ${method} ${url.host}${url.pathname}`);
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+}
+
+/**
+ * Prove the guard is live before trusting it. A POST to a loopback port that
+ * nothing listens on must die in the guard, not at the socket; if the guard
+ * were somehow not installed, the probe still never leaves the machine.
+ */
+async function proveDryRunNetworkGuard(): Promise<void> {
+  try {
+    await fetch("http://127.0.0.1:9/dry-run-probe", { method: "POST" });
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("DRY_RUN blocked")) return;
+    throw new Error(`DRY_RUN network guard is not active: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  throw new Error("DRY_RUN network guard is not active: the probe request went out");
 }
 
 // ─── Gmail sync (what the cron route did between the scrape loop and the emails) ──
@@ -193,7 +240,7 @@ async function main(): Promise<void> {
   }
 
   if (DRY_RUN) {
-    // DRY_RUN works by taking RESEND_API_KEY away before the campaigns read it.
+    // Layer one: take RESEND_API_KEY away before the campaigns read it.
     // sendEmail() (src/lib/emails.ts) reads the key per call and returns
     // { ok: false, error: "resend not configured" } without touching the
     // network when it is missing, and all three campaigns `continue` on
@@ -203,6 +250,12 @@ async function main(): Promise<void> {
     // is a console.error, which the log filter redacts.
     delete process.env.RESEND_API_KEY;
     delete process.env.NEXT_PUBLIC_SENTRY_DSN;
+    // Layer two: refuse every write and every non-Supabase host at the
+    // network, and prove that refusal works before anything else runs. A
+    // campaign that does try to write then shows up as "threw: DRY_RUN
+    // blocked PATCH ..." and the run exits non-zero.
+    installDryRunNetworkGuard(process.env.NEXT_PUBLIC_SUPABASE_URL);
+    await proveDryRunNetworkGuard();
     console.log("emails: DRY_RUN=1, no email will be sent and no profile row will be updated");
   }
 
