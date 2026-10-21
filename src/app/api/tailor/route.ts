@@ -3,7 +3,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { generateObject, generateText, type LanguageModel } from "ai";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { captureError } from "@/lib/sentry";
-import { type PaidWith, type TokenUsage } from "@/lib/billing";
+import { sumTokenUsage, tokenUsageOf, type PaidWith, type TokenUsage } from "@/lib/billing";
 import {
   capReachedBody,
   loadBillingState,
@@ -242,11 +242,12 @@ export async function POST(req: Request) {
           1400;
 
         // One entry per model call, so a block's row in tailor_events carries
-        // the retries it needed as well as the first attempt.
+        // the retries it needed as well as the first attempt. tokenUsageOf
+        // keeps cached tokens out of input_tokens (see src/lib/billing.ts).
         const calls: TokenUsage[] = [];
         const logUsage = (ok: boolean) => {
           if (calls.length === 0) return;
-          const total = sumUsage(calls);
+          const total = sumTokenUsage(calls);
           pendingLogs.push(
             recordTailorEvent(service, {
               user_id: user.id,
@@ -276,7 +277,7 @@ export async function POST(req: Request) {
               maxOutputTokens: tokens,
               abortSignal: clientAbort,
             });
-            calls.push(usageOf(usage));
+            calls.push(tokenUsageOf(usage));
             return object;
           }
           const { text: raw, usage } = await generateText({
@@ -285,7 +286,7 @@ export async function POST(req: Request) {
             maxOutputTokens: tokens,
             abortSignal: clientAbort,
           });
-          calls.push(usageOf(usage));
+          calls.push(tokenUsageOf(usage));
           return parseJsonLoosely(raw);
         };
 
@@ -413,33 +414,6 @@ export async function POST(req: Request) {
 
 function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
-}
-
-// The AI SDK reports cached prompt tokens separately from inputTokens, and
-// may leave any field undefined for a provider that does not report it.
-function usageOf(usage: {
-  inputTokens?: number;
-  outputTokens?: number;
-  inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
-} | undefined): TokenUsage {
-  return {
-    inputTokens: usage?.inputTokens ?? 0,
-    outputTokens: usage?.outputTokens ?? 0,
-    cacheReadTokens: usage?.inputTokenDetails?.cacheReadTokens ?? 0,
-    cacheWriteTokens: usage?.inputTokenDetails?.cacheWriteTokens ?? 0,
-  };
-}
-
-function sumUsage(calls: TokenUsage[]): TokenUsage {
-  return calls.reduce<TokenUsage>(
-    (acc, c) => ({
-      inputTokens: acc.inputTokens + c.inputTokens,
-      outputTokens: acc.outputTokens + c.outputTokens,
-      cacheReadTokens: (acc.cacheReadTokens ?? 0) + (c.cacheReadTokens ?? 0),
-      cacheWriteTokens: (acc.cacheWriteTokens ?? 0) + (c.cacheWriteTokens ?? 0),
-    }),
-    { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
-  );
 }
 
 function parseJsonLoosely(text: string): any | null {

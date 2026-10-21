@@ -45,6 +45,8 @@ import {
   STRIPE_FEE_FIXED_CENTS,
   STRIPE_FEE_PERCENT,
   getCreditPack,
+  sumTokenUsage,
+  tokenUsageOf,
   usageCostUsd,
   type TokenUsage,
 } from "../../src/lib/billing";
@@ -98,19 +100,6 @@ type BlockResult = {
   error?: string;
 };
 
-function usageOf(u: {
-  inputTokens?: number;
-  outputTokens?: number;
-  inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
-} | undefined): TokenUsage {
-  return {
-    inputTokens: u?.inputTokens ?? 0,
-    outputTokens: u?.outputTokens ?? 0,
-    cacheReadTokens: u?.inputTokenDetails?.cacheReadTokens ?? 0,
-    cacheWriteTokens: u?.inputTokenDetails?.cacheWriteTokens ?? 0,
-  };
-}
-
 async function runBlock(model: LanguageModel, block: TailorBlock, tone: Tone): Promise<BlockResult> {
   const promptArgs = { resume: RESUME, jobDescription: JOB_DESCRIPTION, role: ROLE, company: COMPANY, tone };
   const auditCtx = { resume: RESUME, jobDescription: JOB_DESCRIPTION };
@@ -123,11 +112,11 @@ async function runBlock(model: LanguageModel, block: TailorBlock, tone: Tone): P
     const started = Date.now();
     if (schema) {
       const r = await generateObject({ model, prompt: text, schema, maxOutputTokens: tokens });
-      calls.push({ ...usageOf(r.usage), ms: Date.now() - started });
+      calls.push({ ...tokenUsageOf(r.usage), ms: Date.now() - started });
       return r.object;
     }
     const r = await generateText({ model, prompt: text, maxOutputTokens: tokens });
-    calls.push({ ...usageOf(r.usage), ms: Date.now() - started });
+    calls.push({ ...tokenUsageOf(r.usage), ms: Date.now() - started });
     return parseJsonLoosely(r.text);
   };
 
@@ -160,17 +149,7 @@ async function runBlock(model: LanguageModel, block: TailorBlock, tone: Tone): P
   return result;
 }
 
-function sum(calls: Call[]): TokenUsage {
-  return calls.reduce<TokenUsage>(
-    (acc, c) => ({
-      inputTokens: acc.inputTokens + c.inputTokens,
-      outputTokens: acc.outputTokens + c.outputTokens,
-      cacheReadTokens: (acc.cacheReadTokens ?? 0) + (c.cacheReadTokens ?? 0),
-      cacheWriteTokens: (acc.cacheWriteTokens ?? 0) + (c.cacheWriteTokens ?? 0),
-    }),
-    { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
-  );
-}
+const sum = (calls: Call[]): TokenUsage => sumTokenUsage(calls);
 
 const usd = (n: number) => `$${n.toFixed(4)}`;
 

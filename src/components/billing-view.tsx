@@ -126,7 +126,15 @@ export function BillingView({ state, pack, purchases, notice }: Props) {
               <span className="mono text-2xl font-bold tabular-nums">{state.credits}</span>
             </div>
 
-            {state.paymentsEnabled ? (
+            {state.hasOwnKey ? (
+              // A tailor on the user's own key never spends a credit, so a
+              // purchase here would buy nothing until the key is removed.
+              <p className="text-[10px] text-muted pt-1">
+                Credits are not used while your own Anthropic key is on file, so there is nothing to buy.
+                Remove the key in <a href="/settings" className="text-accent-purple hover:opacity-70">Settings</a> if
+                you would rather use credits.
+              </p>
+            ) : state.paymentsEnabled ? (
               <div className="flex items-center gap-3 flex-wrap pt-1">
                 <button onClick={buyCredits} disabled={buying} className="cb-btn cb-btn--solid">
                   {buying ? "Opening checkout..." : `Buy ${pack.credits} credits for ${formatUsd(pack.priceCents)}`}

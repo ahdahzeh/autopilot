@@ -161,9 +161,10 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
 
   // Auto-draft the cover letter in the background when the modal opens, as
   // long as we have a JD and haven't already drafted one. Only fires the
-  // cover block to preserve the user's 40/day rate limit — other tabs stay
-  // on-demand. Guarded by a ref so Strict Mode's double-effect (and any job
-  // id shuffle) doesn't double-fire.
+  // cover block, but it still counts as one of the TAILOR_DAILY_LIMIT free
+  // tailors (20 since 2026-10-20); other tabs stay on-demand. Guarded by a
+  // ref so Strict Mode's double-effect (and any job id shuffle) doesn't
+  // double-fire.
   useEffect(() => {
     if (!job.description || job.description.trim().length < 50) return;
     if (cover.status !== "idle") return;
@@ -232,6 +233,11 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
           : s);
       } finally {
         setAutoCoverDrafting(false);
+        // The draft just used one of today's tailors; the count under the
+        // Tailor button was fetched before it ran.
+        fetchBillingState().then((s) => {
+          if (s) setBilling(s);
+        });
       }
     })();
 

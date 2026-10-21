@@ -14,6 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { captureError } from "@/lib/sentry";
 import {
   BILLING_PATH,
+  CREDIT_PACK_KEY_PREFIX,
   TAILOR_DAILY_LIMIT,
   getCreditPack,
   type BillingState,
@@ -303,20 +304,25 @@ export function isPaidCheckoutEvent(event: Stripe.Event): boolean {
 // Null when the session is not paid or its metadata is not ours. Everything
 // the grant needs comes from the session object, never from the request
 // body as a whole, so a forged body that somehow passed verification would
-// still have to carry a valid user id.
+// still have to carry a valid user id. The pack key is required and must be
+// one of ours: a Stripe account delivers every checkout.session.completed on
+// the account to this endpoint, including another product's if the owner
+// ever shares the account, and those must be acknowledged, never credited.
 export function grantFromCheckoutSession(session: Stripe.Checkout.Session): CreditGrant | null {
   if (session.payment_status !== "paid") return null;
   const meta = session.metadata ?? {};
   const userId = meta.user_id ?? session.client_reference_id ?? "";
+  const pack = meta.pack ?? "";
   const credits = Number.parseInt(meta.credits ?? "", 10);
   if (!UUID_RE.test(userId)) return null;
+  if (!pack.startsWith(CREDIT_PACK_KEY_PREFIX)) return null;
   if (!Number.isInteger(credits) || credits <= 0) return null;
   const pi = session.payment_intent;
   return {
     userId,
     sessionId: session.id,
     paymentIntentId: typeof pi === "string" ? pi : pi?.id ?? null,
-    pack: meta.pack || `tailor_${credits}`,
+    pack,
     credits,
     amountCents: session.amount_total ?? 0,
     currency: session.currency ?? "usd",
@@ -346,7 +352,11 @@ export async function applyCreditGrant(service: Client, grant: CreditGrant): Pro
   return data === true;
 }
 
-export type CheckoutOutcome = "credited" | "already_credited" | "unpaid" | "not_yours";
+export type CheckoutOutcome =
+  // credits is what that session bought, read from its metadata, so the
+  // notice stays right even if the pack size changes between buy and return.
+  | { outcome: "credited"; credits: number }
+  | { outcome: "already_credited" | "unpaid" | "not_yours" };
 
 // Used by the billing page when the user lands back on it after paying, so
 // credits show up immediately even if the webhook is late or not configured
@@ -359,9 +369,11 @@ export async function creditCheckoutSession(
 ): Promise<CheckoutOutcome> {
   const session = await stripe.checkout.sessions.retrieve(sessionId);
   const grant = grantFromCheckoutSession(session);
-  if (!grant) return "unpaid";
-  if (grant.userId !== expectedUserId) return "not_yours";
-  return (await applyCreditGrant(service, grant)) ? "credited" : "already_credited";
+  if (!grant) return { outcome: "unpaid" };
+  if (grant.userId !== expectedUserId) return { outcome: "not_yours" };
+  return (await applyCreditGrant(service, grant))
+    ? { outcome: "credited", credits: grant.credits }
+    : { outcome: "already_credited" };
 }
 
 export { getCreditPack };

@@ -44,6 +44,10 @@ create table if not exists public.tailor_events (
   -- Model calls made for this block: 1, plus one for an unparseable first
   -- answer, plus one for the output-guard correction retry.
   calls integer not null default 1,
+  -- Uncached prompt tokens only. Cache reads and writes bill at different
+  -- rates and have their own columns, so summing input_tokens at the list
+  -- price never double counts a cached token (tokenUsageOf in
+  -- src/lib/billing.ts does the split).
   input_tokens integer not null default 0,
   output_tokens integer not null default 0,
   cache_read_tokens integer not null default 0,

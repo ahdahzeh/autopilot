@@ -23,7 +23,7 @@ export default async function BillingPage({ searchParams }: { searchParams: Sear
   if (!user) redirect("/login");
 
   const pack = getCreditPack();
-  const notice = await resolveCheckoutNotice(params, user.id, pack.credits);
+  const notice = await resolveCheckoutNotice(params, user.id);
 
   const [state, purchasesRes] = await Promise.all([
     loadBillingState(supabase, user.id),
@@ -58,7 +58,6 @@ export default async function BillingPage({ searchParams }: { searchParams: Sear
 async function resolveCheckoutNotice(
   params: { [key: string]: string | string[] | undefined },
   userId: string,
-  packCredits: number,
 ): Promise<CheckoutNotice | null> {
   const checkout = typeof params.checkout === "string" ? params.checkout : "";
   if (checkout === "cancelled") return { kind: "cancelled" };
@@ -69,10 +68,10 @@ async function resolveCheckoutNotice(
   if (!sessionId || !stripe) return { kind: "pending" };
 
   try {
-    const outcome = await creditCheckoutSession(stripe, createServiceClient(), sessionId, userId);
-    if (outcome === "credited") return { kind: "credited", credits: packCredits };
-    if (outcome === "already_credited") return { kind: "already_credited" };
-    if (outcome === "unpaid") return { kind: "pending" };
+    const result = await creditCheckoutSession(stripe, createServiceClient(), sessionId, userId);
+    if (result.outcome === "credited") return { kind: "credited", credits: result.credits };
+    if (result.outcome === "already_credited") return { kind: "already_credited" };
+    if (result.outcome === "unpaid") return { kind: "pending" };
     return null;
   } catch (err) {
     captureError(err, { route: "settings/billing", stage: "credit_checkout_session", sessionId });

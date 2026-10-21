@@ -14,15 +14,21 @@
  *
  * Covers the pure pieces (verify, grant extraction) for a valid delivery, a
  * bad signature, a tampered body, a stale timestamp, an unpaid session, an
- * async payment, an unrelated event type and bad metadata; and the real route
+ * async payment, an unrelated event type and bad metadata; the real route
  * handler for 503 without Stripe env, 400 on a bad or missing signature, 200
  * credited on a valid delivery, 200 not credited on the duplicate delivery,
- * 200 ignored for an unrelated event, and 500 when the database fails.
+ * 200 ignored for an unrelated event, and 500 when the database fails; and
+ * the token accounting behind tailor_events, driven through the real
+ * Anthropic provider with a mocked fetch so a change in how the AI SDK
+ * reports cached tokens fails here instead of silently inflating costs.
  */
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import Stripe from "stripe";
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { generateText } from "ai";
+import { tokenUsageOf, usageCostUsd } from "../../src/lib/billing";
 import {
   applyCreditGrant,
   constructWebhookEvent,
@@ -249,17 +255,79 @@ async function main() {
     assert.equal(grantFromEvent(event), null);
   });
 
-  await test("bad metadata: non-uuid user id or non-positive credits grants nothing", () => {
+  await test("bad metadata: non-uuid user id, non-positive credits, or a pack that is not ours grants nothing", () => {
     for (const meta of [
       { user_id: "not-a-uuid", pack: "tailor_20", credits: "20" },
       { user_id: USER_ID, pack: "tailor_20", credits: "0" },
       { user_id: USER_ID, pack: "tailor_20", credits: "abc" },
+      // Another product on the same Stripe account: no pack key, or one
+      // with a different prefix, even with a valid user id and credits.
+      { user_id: USER_ID, credits: "20" },
+      { user_id: USER_ID, pack: "other_product_pro", credits: "20" },
       {},
     ]) {
       const payload = checkoutEvent({ metadata: meta, client_reference_id: null });
       const event = constructWebhookEvent(stripe, payload, sign(payload), SECRET);
       assert.equal(grantFromEvent(event), null, `metadata ${JSON.stringify(meta)}`);
     }
+  });
+
+  // ---- Token accounting (tailor_events) ------------------------------------
+
+  await test("token buckets: cached tokens are split out of input_tokens, not counted twice", async () => {
+    // The Anthropic provider, answered by a canned Messages API response
+    // with every usage field Anthropic bills separately. No network.
+    const anthropic = createAnthropic({
+      apiKey: "sk-ant-dummy",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            id: "msg_test",
+            type: "message",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "{\"ok\":true}" }],
+            stop_reason: "end_turn",
+            stop_sequence: null,
+            usage: {
+              input_tokens: 100,
+              output_tokens: 50,
+              cache_creation_input_tokens: 100,
+              cache_read_input_tokens: 800,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    });
+    const { usage } = await generateText({ model: anthropic("claude-sonnet-4-6"), prompt: "hi" });
+
+    // ai@6 reports the total prompt size as inputTokens (1000 here); the
+    // uncached 100 is in inputTokenDetails. The route must store the 100.
+    assert.equal(usage.inputTokens, 1000, "SDK convention changed: inputTokens is no longer the total");
+    assert.deepEqual(tokenUsageOf(usage), {
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: 800,
+      cacheWriteTokens: 100,
+    });
+
+    // Priced per bucket at Sonnet 4.6 list: 100 x $3 + 50 x $15 + 800 x $0.30 + 100 x $3.75 per MTok.
+    const cost = usageCostUsd("claude-sonnet-4-6", tokenUsageOf(usage));
+    assert.ok(cost !== null && Math.abs(cost - 0.001665) < 1e-9, `cost ${cost}`);
+    // Storing the total as input_tokens would have priced this call at 2.6x.
+    const doubleCounted = usageCostUsd("claude-sonnet-4-6", {
+      inputTokens: 1000, outputTokens: 50, cacheReadTokens: 800, cacheWriteTokens: 100,
+    });
+    assert.ok(doubleCounted !== null && doubleCounted > cost * 2);
+
+    // Providers with no breakdown: total minus the cache buckets, never negative.
+    assert.deepEqual(
+      tokenUsageOf({ inputTokens: 1000, outputTokens: 50, inputTokenDetails: { cacheReadTokens: 800 } }),
+      { inputTokens: 200, outputTokens: 50, cacheReadTokens: 800, cacheWriteTokens: 0 },
+    );
+    assert.deepEqual(tokenUsageOf(undefined), {
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+    });
   });
 
   // ---- The real route handler --------------------------------------------
