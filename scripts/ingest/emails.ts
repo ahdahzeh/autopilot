@@ -3,9 +3,10 @@
  *
  * The Vercel cron used to send these at 13:00 UTC, which was hours before
  * ingest finished (the 13:00 ingest run started between 16:01 and 18:53 UTC on
- * 2026-10-16..20), so every digest described yesterday's jobs. The emails job
- * in .github/workflows/ingest.yml needs the shard jobs and runs this script
- * after them, with always() so one dead shard does not stop everyone's digest.
+ * 2026-10-16..20 and then took 48 to 54 minutes), so every digest described
+ * yesterday's jobs. The emails job in .github/workflows/ingest.yml needs the
+ * shard jobs and runs this script after them, with always() so one dead shard
+ * does not stop everyone's digest.
  *
  * Order matches the old cron route: Gmail sync first so application statuses
  * are fresh, then onboarding reminders, engagement nudges and the daily digest.
@@ -16,23 +17,28 @@
  *   npx tsx scripts/ingest/emails.ts
  *   DRY_RUN=1 npx tsx scripts/ingest/emails.ts   # no email leaves, no row is written
  *
- * Environment:
+ * Environment (every variable the campaign code path reads):
  *   NEXT_PUBLIC_SUPABASE_URL     required, createServiceClient() in src/lib/supabase/server.ts
  *   SUPABASE_SERVICE_ROLE_KEY    required, same
  *   RESEND_API_KEY               required unless DRY_RUN=1; sendEmail() in src/lib/emails.ts
- *   NEXT_PUBLIC_APP_URL          links in every email and the Gmail sync target;
- *                                defaults to https://autopilot.ahdahzeh.com like the lib does
- *   CRON_SECRET                  optional; with it the live site's Gmail sync runs first
- *   NEXT_PUBLIC_SENTRY_DSN       optional; captureError() falls back to console without it
+ *   NEXT_PUBLIC_APP_URL          links in every email (src/lib/emails.ts, email-campaigns.ts)
+ *                                and the Gmail sync target; defaults to
+ *                                https://autopilot.ahdahzeh.com like the lib does
+ *   CRON_SECRET                  optional; bearer token for the Gmail sync, must equal the
+ *                                Vercel env var of the same name. The sync is attempted
+ *                                without it, since the site only checks it when it has one.
+ *   NEXT_PUBLIC_SENTRY_DSN       optional; captureError() in src/lib/sentry.ts falls back to
+ *                                console.error without it (and @sentry/nextjs is not installed)
  *   INGEST_RESULT                optional; the workflow passes needs.ingest.result for the summary
- *   DRY_RUN=1                    see below
+ *   DRY_RUN=1                    see main()
  *
  * The Actions log is public, because the repo is. Every console call is
  * filtered before it reaches stdout: email addresses and user ids become
  * 8-character hashes (the same hash run.ts uses, so one grep finds a user in
  * both jobs). This is load-bearing, not cosmetic: processDailyDigest logs
- * "[daily-digest] skip <email>", captureError's console fallback prints
- * { email, userId }, and every campaign's errors list starts with the address.
+ * "[daily-digest] skip <email>", sendEmail() logs "skipping send to <email>",
+ * captureError's console fallback prints { email, userId }, and every
+ * campaign's errors list starts with the address.
  */
 import { createHash } from "node:crypto";
 import { format } from "node:util";
@@ -71,22 +77,37 @@ function installLogFilter(): void {
 
 // ─── Gmail sync (what the cron route did between the scrape loop and the emails) ──
 
+/**
+ * The cron route ran the live site's Gmail sync before the campaigns so the
+ * digest saw fresh application statuses; this keeps that order. The sync route
+ * only enforces CRON_SECRET when the Vercel env var is set (it was not on
+ * 2026-10-20), so the call goes out either way: without a token it is a 200
+ * where Vercel has no secret, and a 401 that names the missing repository
+ * secret where it has one. Best effort, like the route: a failed sync is a
+ * log line, not a red job, because the digest still has yesterday's statuses.
+ */
 async function syncGmail(appUrl: string): Promise<string> {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return "skipped: CRON_SECRET not set";
+  // The sync writes application statuses to profiles and jobs.
   if (DRY_RUN) return "skipped: DRY_RUN";
+  const secret = process.env.CRON_SECRET;
+  const token = secret ? "with CRON_SECRET" : "without CRON_SECRET";
   try {
     const res = await fetch(`${appUrl}/api/gmail/sync`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${secret}` },
+      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
       signal: AbortSignal.timeout(GMAIL_SYNC_TIMEOUT_MS),
     });
-    if (!res.ok) return `failed: HTTP ${res.status}`;
+    if (res.status === 401) {
+      return secret
+        ? `failed: HTTP 401 ${token} (the repository secret does not match Vercel's CRON_SECRET)`
+        : `failed: HTTP 401 ${token} (add a CRON_SECRET repository secret equal to Vercel's)`;
+    }
+    if (!res.ok) return `failed: HTTP ${res.status} ${token}`;
     // The body also carries per-user results keyed by user id; only the count is worth printing.
     const data = (await res.json().catch(() => ({}))) as { processed?: number };
-    return `ok: ${data.processed ?? 0} users`;
+    return `ok: ${data.processed ?? 0} users ${token}`;
   } catch (err) {
-    return `failed: ${err instanceof Error ? err.message : String(err)}`;
+    return `failed: ${err instanceof Error ? err.message : String(err)} ${token}`;
   }
 }
 

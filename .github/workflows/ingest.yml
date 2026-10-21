@@ -24,22 +24,25 @@
 # Optional:
 #   ANTHROPIC_API_KEY  - enables Haiku rescoring. Without it the scraper falls
 #                        back to heuristic scores and the run costs nothing.
-#   CRON_SECRET        - lets the emails job run the live site's Gmail sync
-#                        before the digest, as the Vercel cron did. Skipped
-#                        when unset.
+#   CRON_SECRET        - bearer token for the Gmail sync call to the live site
+#                        before the digest. Must equal the Vercel env var of
+#                        the same name. The sync is attempted without it, since
+#                        the site only checks the token when it has one; a 401
+#                        in the log means the two are out of step.
 #
-# The repo is public, so these logs are public. Neither script prints a user
-# id, an email address or a job title; users appear as 8-character hashes.
+# The repo is public, so these logs are. Neither script prints a user id, an
+# email address or a job title; users appear as 8-character hashes.
 name: Daily job ingest
 
 on:
   schedule:
     # 09:23 UTC. GitHub delays scheduled runs under load: the 13:00 slot
     # started between 16:01 and 18:53 UTC on 2026-10-16..20, 3 to 6 hours
-    # late. Top-of-the-hour slots are the busiest, so the minute is odd and
-    # the hour early. A typical delay plus a 1 hour run lands the digest
-    # mid-morning Eastern; even the worst observed delay lands it before
-    # 12:30 Eastern instead of mid-afternoon.
+    # late, and each run then took 48 to 54 minutes. Top-of-the-hour slots
+    # are the busiest, so the minute is odd and the hour early. A typical
+    # delay plus a 1 hour run lands the digest mid-morning Eastern; even the
+    # worst observed delay lands it before 12:30 Eastern instead of
+    # mid-afternoon.
     - cron: "23 9 * * *"
   workflow_dispatch:
     inputs:
@@ -101,7 +104,7 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     # Users are scraped one at a time at roughly 3 minutes each (17 users took
-    # 48 to 54 minutes on 2026-10-16..19, installs included). At 4 shards and
+    # 48 to 54 minutes on 2026-10-16..20, installs included). At 4 shards and
     # 60 users a shard holds 15 users: about 45 minutes of scraping plus 4 of
     # setup. One stuck request is capped at SCRAPE_TIMEOUT_MS (10 minutes), so
     # even five of the fifteen hitting that ceiling finishes inside 80. 120
@@ -196,6 +199,8 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      # Empty when the secret is missing; emails.ts then calls the sync
+      # without a token and reports the HTTP status it got.
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       # Every link in every email is built from this, and the Gmail sync is
       # POSTed to it. Not a secret.

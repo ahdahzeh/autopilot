@@ -21,18 +21,26 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization");
-  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  // Fail closed. This check used to be skipped entirely when CRON_SECRET was
+  // unset, which made a route that emails every user callable by anyone, and
+  // production had no CRON_SECRET on 2026-10-20. Until one is set on Vercel,
+  // the manual trigger is off rather than open.
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    return Response.json({ error: "CRON_SECRET is not set on this deployment" }, { status: 503 });
+  }
+  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   // Gmail sync first, so application statuses are fresh before any email goes
   // out. Internal fetch back to our own sync endpoint, same as the emails job.
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://autopilot.ahdahzeh.com").replace(/\/+$/, "");
   let gmailSync: string;
   try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/gmail/sync`, {
+    const res = await fetch(`${appUrl}/api/gmail/sync`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+      headers: { Authorization: `Bearer ${secret}` },
     });
     gmailSync = res.ok ? "ok" : `HTTP ${res.status}`;
   } catch (err) {

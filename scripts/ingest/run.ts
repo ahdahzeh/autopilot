@@ -10,7 +10,7 @@
  * parallel jobs, each with its own scraper, and each copy keeps the users
  * whose stable hash lands on its SHARD_INDEX. The scraper serialises /scrape
  * behind a lock of one, so concurrency inside one job buys nothing: 17 users
- * took 48 to 54 minutes serially on 2026-10-16..19, and 60 would take about
+ * took 48 to 54 minutes serially on 2026-10-16..20, and 60 would take about
  * 3 hours against GitHub's 6 hour job limit. More shards is the only lever.
  *
  * Expects the scraper to already be listening on RAILWAY_SCRAPER_URL (the
@@ -60,18 +60,21 @@ function shardOf(id: string, total: number): number {
  * SHARD_INDEX / SHARD_TOTAL from the environment. Both default so a plain
  * `npx tsx scripts/ingest/run.ts` still scrapes everyone, and both are checked
  * strictly: a typo like SHARD_TOTAL=4 with SHARD_INDEX=4 would silently scrape
- * nobody, and that is exactly the failure that must not go green.
+ * nobody, and that is exactly the failure that must not go green. Digits only,
+ * because Number("") is 0 and Number("1e0") is 1, and either would quietly
+ * pick a shard nobody asked for.
  */
 function shardConfig(): { index: number; total: number } {
-  const total = Number(process.env.SHARD_TOTAL ?? 1);
-  const index = Number(process.env.SHARD_INDEX ?? 0);
-  if (!Number.isInteger(total) || total < 1) {
+  const rawTotal = process.env.SHARD_TOTAL ?? "1";
+  const rawIndex = process.env.SHARD_INDEX ?? "0";
+  if (!/^\d+$/.test(rawTotal) || Number(rawTotal) < 1) {
     throw new Error(`SHARD_TOTAL must be a positive integer, got "${process.env.SHARD_TOTAL}"`);
   }
-  if (!Number.isInteger(index) || index < 0 || index >= total) {
+  const total = Number(rawTotal);
+  if (!/^\d+$/.test(rawIndex) || Number(rawIndex) >= total) {
     throw new Error(`SHARD_INDEX must be an integer from 0 to ${total - 1}, got "${process.env.SHARD_INDEX}"`);
   }
-  return { index, total };
+  return { index: Number(rawIndex), total };
 }
 
 const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
