@@ -83,7 +83,7 @@ export function BillingView({ state, pack, purchases, notice }: Props) {
         {notice && <Notice notice={notice} />}
 
         {/* Today */}
-        <Section title="Today's tailoring">
+        <Section title="Today's Tailoring">
           <div className="bg-card border border-border rounded-xl p-4">
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold">Free tailors used today</p>
@@ -137,7 +137,7 @@ export function BillingView({ state, pack, purchases, notice }: Props) {
             ) : state.paymentsEnabled ? (
               <div className="flex items-center gap-3 flex-wrap pt-1">
                 <button onClick={buyCredits} disabled={buying} className="cb-btn cb-btn--solid">
-                  {buying ? "Opening checkout..." : `Buy ${pack.credits} credits for ${formatUsd(pack.priceCents)}`}
+                  {buying ? "Opening checkout" : `Buy ${pack.credits} credits for ${formatUsd(pack.priceCents)}`}
                 </button>
                 <span className="text-[10px] text-muted">
                   Card payment through Stripe. Credits are added as soon as the payment clears.
@@ -158,7 +158,7 @@ export function BillingView({ state, pack, purchases, notice }: Props) {
         </Section>
 
         {/* Purchase history */}
-        <Section title="Purchase history">
+        <Section title="Purchase History">
           {purchases.length > 0 ? (
             <div className="space-y-2">
               {purchases.map((p) => (
@@ -170,11 +170,14 @@ export function BillingView({ state, pack, purchases, notice }: Props) {
                     <p className="text-sm font-semibold">
                       {p.credits} {p.credits === 1 ? "credit" : "credits"}
                     </p>
-                    <p className="text-[9px] mono text-muted uppercase tracking-widest">
+                    {/* Locale formatting runs on the server first and again in
+                        the browser, which may pick a different locale; the
+                        browser's wins without a hydration warning. */}
+                    <p className="text-[9px] mono text-muted uppercase tracking-widest" suppressHydrationWarning>
                       {formatDate(p.created_at)}
                     </p>
                   </div>
-                  <span className="mono text-sm font-bold tabular-nums shrink-0">
+                  <span className="mono text-sm font-bold tabular-nums shrink-0" suppressHydrationWarning>
                     {formatMoney(p.amount_cents, p.currency)}
                   </span>
                 </div>
@@ -202,7 +205,7 @@ export function BillingView({ state, pack, purchases, notice }: Props) {
 function Notice({ notice }: { notice: CheckoutNotice }) {
   const text =
     notice.kind === "credited"
-      ? `Payment received. ${notice.credits} credits were added to your balance.`
+      ? `Payment received. ${notice.credits} ${notice.credits === 1 ? "credit was" : "credits were"} added to your balance.`
       : notice.kind === "already_credited"
         ? "Payment received. Your credits are already in your balance."
         : notice.kind === "pending"

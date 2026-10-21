@@ -14,13 +14,15 @@
  *
  * Covers the pure pieces (verify, grant extraction) for a valid delivery, a
  * bad signature, a tampered body, a stale timestamp, an unpaid session, an
- * async payment, an unrelated event type and bad metadata; the real route
- * handler for 503 without Stripe env, 400 on a bad or missing signature, 200
- * credited on a valid delivery, 200 not credited on the duplicate delivery,
- * 200 ignored for an unrelated event, and 500 when the database fails; and
- * the token accounting behind tailor_events, driven through the real
- * Anthropic provider with a mocked fetch so a change in how the AI SDK
- * reports cached tokens fails here instead of silently inflating costs.
+ * async payment, an unrelated event type and bad metadata; the Checkout
+ * Session params the checkout route sends and the billing page's return path
+ * (credit once, already credited, not yours, unpaid); the real route handler
+ * for 503 without Stripe env, 400 on a bad or missing signature, 200 credited
+ * on a valid delivery, 200 not credited on the duplicate delivery, 200
+ * ignored for an unrelated event, and 500 when the database fails; and the
+ * token accounting behind tailor_events, driven through the real Anthropic
+ * provider with a mocked fetch so a change in how the AI SDK reports cached
+ * tokens fails here instead of silently inflating costs.
  */
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
@@ -28,26 +30,32 @@ import type { AddressInfo } from "node:net";
 import Stripe from "stripe";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
-import { tokenUsageOf, usageCostUsd } from "../../src/lib/billing";
+import { getCreditPack, tokenUsageOf, usageCostUsd } from "../../src/lib/billing";
 import {
   applyCreditGrant,
+  checkoutSessionParams,
   constructWebhookEvent,
+  creditCheckoutSession,
   grantFromEvent,
 } from "../../src/lib/billing-server";
 
-// Nothing in this file may reach a real project, whatever the shell has.
+// Nothing in this file may reach a real project, whatever the shell has. The
+// pack overrides go too, so the checkout assertions see the defaults.
 for (const name of [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
   "STRIPE_SECRET_KEY",
   "STRIPE_WEBHOOK_SECRET",
+  "TAILOR_CREDIT_PACK_CREDITS",
+  "TAILOR_CREDIT_PACK_PRICE_CENTS",
 ]) {
   delete process.env[name];
 }
 
 const SECRET = "whsec_test_dummy_secret_for_generated_signatures";
 const USER_ID = "11111111-1111-1111-1111-111111111111";
+const OTHER_USER_ID = "22222222-2222-2222-2222-222222222222";
 
 // Any key string works for the signing helpers; nothing is sent anywhere.
 const stripe = new Stripe("sk_test_dummy", { appInfo: { name: "autopilot-webhook-test" } });
@@ -270,6 +278,69 @@ async function main() {
       const event = constructWebhookEvent(stripe, payload, sign(payload), SECRET);
       assert.equal(grantFromEvent(event), null, `metadata ${JSON.stringify(meta)}`);
     }
+  });
+
+  // ---- Checkout session params + the billing page's return path ----------
+
+  await test("checkout params: inline price_data for the configured pack, the metadata the webhook trusts, URLs back to /settings/billing", () => {
+    const pack = getCreditPack();
+    assert.deepEqual(pack, { key: "tailor_20", credits: 20, priceCents: 500, currency: "usd" });
+    const params = checkoutSessionParams({
+      pack,
+      userId: USER_ID,
+      email: "u1@example.com",
+      origin: "https://autopilot.example",
+    });
+    assert.equal(params.mode, "payment");
+    assert.equal(params.line_items?.length, 1);
+    const item = params.line_items![0];
+    assert.equal(item.quantity, 1);
+    assert.equal(item.price_data?.currency, "usd");
+    assert.equal(item.price_data?.unit_amount, 500);
+    assert.ok(item.price_data?.product_data?.name.includes("20"));
+    assert.deepEqual(params.metadata, { user_id: USER_ID, pack: "tailor_20", credits: "20" });
+    assert.equal(params.client_reference_id, USER_ID);
+    assert.equal(params.customer_email, "u1@example.com");
+    assert.equal(
+      params.success_url,
+      "https://autopilot.example/settings/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}",
+    );
+    assert.equal(params.cancel_url, "https://autopilot.example/settings/billing?checkout=cancelled");
+  });
+
+  await test("billing page return: a paid session credits once and then reads as already credited; another user's or an unpaid session never credits", async () => {
+    const service = fakeService();
+    const paid = JSON.parse(checkoutEvent({}, "checkout.session.completed", "cs_test_return")).data.object;
+    // Only checkout.sessions.retrieve is used, and nothing is sent anywhere.
+    const fakeStripe = {
+      checkout: { sessions: { retrieve: async (id: string) => ({ ...paid, id }) } },
+    } as never;
+    assert.deepEqual(
+      await creditCheckoutSession(fakeStripe, service as never, "cs_test_return", USER_ID),
+      { outcome: "credited", credits: 20 },
+    );
+    assert.deepEqual(
+      await creditCheckoutSession(fakeStripe, service as never, "cs_test_return", USER_ID),
+      { outcome: "already_credited" },
+    );
+    assert.equal(service.balances.get(USER_ID), 20);
+
+    // Someone else pasting the session id into their own URL.
+    assert.deepEqual(
+      await creditCheckoutSession(fakeStripe, service as never, "cs_test_other", OTHER_USER_ID),
+      { outcome: "not_yours" },
+    );
+    assert.equal(service.sessions.has("cs_test_other"), false, "a not_yours session never reaches the ledger");
+    assert.equal(service.balances.get(OTHER_USER_ID), undefined);
+
+    const unpaidStripe = {
+      checkout: { sessions: { retrieve: async () => ({ ...paid, id: "cs_test_unpaid", payment_status: "unpaid" }) } },
+    } as never;
+    assert.deepEqual(
+      await creditCheckoutSession(unpaidStripe, service as never, "cs_test_unpaid", USER_ID),
+      { outcome: "unpaid" },
+    );
+    assert.equal(service.sessions.size, 1);
   });
 
   // ---- Token accounting (tailor_events) ------------------------------------

@@ -146,7 +146,9 @@ function intFromEnv(name: string, fallback: number): number {
 // hospital help desk posting (2,658 chars). The 9-block run the route
 // performs per "Tailor for this job" click used 22,496 input + 6,694 output
 // tokens: $0.1679 per tailor, every block clean on the first call. The 5
-// blocks the modal actually shows were $0.1159 of that.
+// blocks the modal actually shows were $0.1159 of that. A second run on
+// 2026-10-21 (same fixture, same model) landed at 22,496 input + 6,658 output
+// tokens, $0.1674, again with no retries, so the number is stable.
 //
 // Pricing follows the brief (measured cost, plus Stripe's 2.9% + $0.30, about
 // a 30% margin, a friendly round number):

@@ -30,6 +30,31 @@
 --     from public.tailor_events group by request_id;
 -- Price it with the per-model rates in src/lib/billing.ts.
 
+-- ── tailor_usage (006 repeated, so this file stands on its own) ────────────
+
+-- On 2026-10-21 prod's PostgREST answered "Could not find the table
+-- 'public.tailor_usage'" (PGRST205), so 006 was either never applied there
+-- or the API schema cache never picked it up, and the daily counter has been
+-- failing open all along (the route swallowed the error). Everything below
+-- needs the table, so the same DDL as 006 is repeated here; every statement
+-- is a no-op where 006 did run.
+create table if not exists public.tailor_usage (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  day date not null,
+  count integer not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, day)
+);
+
+alter table public.tailor_usage enable row level security;
+
+drop policy if exists "tailor_usage self read" on public.tailor_usage;
+create policy "tailor_usage self read"
+  on public.tailor_usage for select
+  using (auth.uid() = user_id);
+
+create index if not exists tailor_usage_day_idx on public.tailor_usage (day);
+
 -- ── tailor_events ──────────────────────────────────────────────────────────
 
 create table if not exists public.tailor_events (
@@ -247,3 +272,8 @@ grant execute on function public.add_tailor_credits(uuid, text, text, text, inte
 
 revoke all on function public.refund_tailor_credit(uuid) from public, anon, authenticated;
 grant execute on function public.refund_tailor_credit(uuid) to service_role;
+
+-- Make PostgREST pick up the new tables and functions right away. Supabase
+-- normally does this on DDL by itself, but prod went without tailor_usage in
+-- its schema cache (see above), so it is not left to chance.
+notify pgrst, 'reload schema';
