@@ -231,8 +231,12 @@ def card_to_job(card: dict, target: SearchTarget) -> JobListing:
 @asynccontextmanager
 async def _browser_page():
     pw = await async_playwright().start()
-    browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
+    browser = None
     try:
+        # Inside the try so a failed launch (no Chromium on the host) still
+        # stops the driver process start() spawned, instead of leaking one per
+        # scrape for the life of the service.
+        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
         context = await browser.new_context(
             viewport={"width": 1440, "height": 900},
             user_agent=(
@@ -242,7 +246,8 @@ async def _browser_page():
         )
         yield await context.new_page()
     finally:
-        await browser.close()
+        if browser is not None:
+            await browser.close()
         await pw.stop()
 
 

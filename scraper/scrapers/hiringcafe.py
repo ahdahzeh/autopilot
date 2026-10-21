@@ -22,6 +22,15 @@ fuzzy full-text match ("SOC Analyst" also returns "Senior Product Manager, SOC
 Experience") and a silently ignored filter is exactly how the feed filled with
 junk before.
 
+The date window is one such ignored filter. The server honours sortBy="date"
+and the locality (checked 2026-10-20: 64 hits for New York against 1461
+nationwide, and the page order changes with sortBy), but dateFetchedPastNDays
+changes nothing: 1, 3, 7, 30 and 365 days all returned the same 64 hits, and
+the first page ran back 159 days. So the age cut is made here from each hit's
+estimated_publish_date, the same 7 day rule BuiltIn applies to its age badge.
+Without it the first review run returned five "SOC Analyst" remote jobs that
+were 8 to 19 days old and New York data analyst roles 48 days old.
+
 Cloudflare fronts hiringcafe.com. The plain client with Chrome's navigation
 headers passed every search on 2026-10-20, and so did headless Chromium that
 day, so a browser would add 400 MB of memory and nothing else. The site does
@@ -44,6 +53,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Iterable, Mapping
 from urllib.parse import quote
 
@@ -77,6 +87,9 @@ TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 # takes about a second, so the cap keeps a 10-title x 3-location user inside
 # the source budget instead of letting the first titles spend all of it.
 MAX_SEARCHES = int(os.getenv("HIRINGCAFE_MAX_SEARCHES", "15"))
+# Sent as dateFetchedPastNDays (which the server ignores, see the module
+# docstring) and enforced here against estimated_publish_date. Same window as
+# BuiltIn's MAX_AGE_DAYS: the daily run only wants fresh posts.
 DAYS_BACK = 7
 # The radius the site itself attaches to a city (its defaultRadius), and the
 # slack allowed when a hit's coordinates are checked again here: a listing's
@@ -266,10 +279,14 @@ def parse_search_page(html: str) -> list[dict]:
 
 # Abbreviations spelled out on both sides before comparing, so "SOC Analyst"
 # meets "Security Operations Center Analyst" and "IT Support" meets
-# "Information Technology Support".
+# "Information Technology Support". "Center" is dropped from the long forms:
+# employers post the same job as "Security Operations Analyst" (three of the
+# first fifty remote hits on 2026-10-20), and requiring the word lost them all.
 TITLE_ALIASES = [
-    (re.compile(r"\bsoc\b"), "security operations center"),
-    (re.compile(r"\bnoc\b"), "network operations center"),
+    (re.compile(r"\bsecurity operations cent(?:er|re)\b"), "security operations"),
+    (re.compile(r"\bnetwork operations cent(?:er|re)\b"), "network operations"),
+    (re.compile(r"\bsoc\b"), "security operations"),
+    (re.compile(r"\bnoc\b"), "network operations"),
     (re.compile(r"\bi\.t\.?(?=\s|$)"), "information technology"),
     (re.compile(r"\bit\b"), "information technology"),
     (re.compile(r"\bbi\b"), "business intelligence"),
@@ -362,9 +379,17 @@ def matches_location(hit: dict, spec: LocationSpec) -> bool:
         us_ok = "US" in countries or "US" in boundless or bool(v5.get("is_workplace_worldwide_ok"))
         return workplace == "remote" and us_ok
     if spec.kind == "metro":
-        for point in hit.get("_geoloc") or []:
-            lat, lon = (point or {}).get("lat"), (point or {}).get("lon")
-            if lat is None or lon is None:
+        # Every live hit so far carried a list of {lat, lon} points, but the
+        # index is Algolia-shaped and Algolia also allows a single object, so
+        # accept either rather than let one odd hit raise out of the loop.
+        points = hit.get("_geoloc") or []
+        if isinstance(points, dict):
+            points = [points]
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            lat, lon = point.get("lat"), point.get("lon")
+            if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
                 continue
             if haversine_miles(spec.lat, spec.lon, lat, lon) <= CITY_RADIUS_MILES * RADIUS_SLACK:
                 return True
@@ -373,6 +398,36 @@ def matches_location(hit: dict, spec: LocationSpec) -> bool:
         # fall back to the text the site shows, which names every city.
         return mentions_location(location_words(f"{spec.city} {spec.state}"), _location_texts(v5))
     return mentions_location(location_words(spec.label), _location_texts(v5))
+
+
+def _now() -> datetime:
+    """Current UTC time; a seam so tests can pin the clock to a fixture's capture day."""
+    return datetime.now(timezone.utc)
+
+
+def posted_days_ago(hit: dict, now: datetime) -> int | None:
+    """Whole days since the hit's estimated_publish_date, or None when it has none.
+
+    The ISO string is on every hit seen so far; the _millis twin is tried
+    second because trimmed fixtures and older hits lack it.
+    """
+    v5 = hit.get("v5_processed_job_data") or {}
+    published: datetime | None = None
+    raw = v5.get("estimated_publish_date")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            published = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        except ValueError:
+            published = None
+    if published is None:
+        millis = v5.get("estimated_publish_date_millis")
+        if isinstance(millis, (int, float)) and millis > 0:
+            published = datetime.fromtimestamp(millis / 1000, tz=timezone.utc)
+    if published is None:
+        return None
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    return max(0, (now - published).days)
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +543,7 @@ async def scrape(titles: list[str], locations: list[str], limit: int = 20) -> li
         pairs = pairs[:MAX_SEARCHES]
     logger.info(f"HiringCafe: {len(titles)} titles x {len(specs)} locations, running {len(pairs)} searches")
 
+    now = _now()
     jobs: list[JobListing] = []
     seen: set[str] = set()
 
@@ -539,10 +595,16 @@ async def scrape(titles: list[str], locations: list[str], limit: int = 20) -> li
                 await asyncio.sleep(random.uniform(0.5, 1.5))
                 continue
 
-            matched = new = 0
+            fresh = matched = new = 0
             for hit in hits:
                 if len(jobs) >= limit:
                     break
+                # Age first: the server ignores the date window we send, and a
+                # hit without a date is kept rather than guessed at.
+                days = posted_days_ago(hit, now)
+                if days is not None and days > DAYS_BACK:
+                    continue
+                fresh += 1
                 info = hit.get("job_information") or {}
                 v5 = hit.get("v5_processed_job_data") or {}
                 if not matches_title(title, info.get("title") or "", v5.get("core_job_title") or ""):
@@ -560,7 +622,10 @@ async def scrape(titles: list[str], locations: list[str], limit: int = 20) -> li
                 seen.add(job.id)
                 jobs.append(job)
                 new += 1
-            logger.info(f"  HiringCafe search {i}/{len(pairs)}: {len(hits)} hits, {matched} on target, {new} new")
+            logger.info(
+                f"  HiringCafe search {i}/{len(pairs)}: {len(hits)} hits, {fresh} within {DAYS_BACK} days, "
+                f"{matched} on target, {new} new"
+            )
             await asyncio.sleep(random.uniform(0.5, 1.5))
 
     logger.info(f"HiringCafe done: {len(jobs)} jobs in {time.monotonic() - started:.1f}s")

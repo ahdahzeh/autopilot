@@ -11,6 +11,7 @@ Fixtures (scraper/tests/fixtures/):
 import asyncio
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -35,6 +36,7 @@ from scrapers.hiringcafe import (  # noqa: E402
     matches_location,
     matches_title,
     parse_search_page,
+    posted_days_ago,
     search_state,
     search_url,
     title_tokens,
@@ -44,6 +46,10 @@ from scrapers.hiringcafe import (  # noqa: E402
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SEARCH_HTML = (FIXTURES / "hiringcafe_classic_search.html").read_text()
 CHALLENGE_HTML = (FIXTURES / "hiringcafe_challenge.html").read_text()
+# The day the search fixture was captured. The scrape loop drops hits older
+# than DAYS_BACK, so end-to-end tests pin the clock here or the fixture's four
+# hits would start failing a week after capture.
+FIXTURE_DAY = datetime(2026, 10, 20, 23, 59, tzinfo=timezone.utc)
 
 
 @pytest.fixture
@@ -157,9 +163,17 @@ def test_expired_or_incomplete_hits_are_dropped(hits):
     ("IT Support Specialist", "Assistant Store Manager", False),
     ("SOC Analyst", "SOC Analyst T1", True),
     ("SOC Analyst", "Security Operations Center Analyst", True),
+    # Employers post the same job without "Center"; the first review run
+    # dropped these three real remote hits on 2026-10-20.
+    ("SOC Analyst", "Security Operations Analyst", True),
+    ("SOC Analyst", "IT & Security Operations Analyst", True),
+    ("SOC Analyst", "Analyst, Security Operations - USA Remote", True),
+    ("Security Operations Center Analyst", "SOC Analyst", True),
     ("SOC Analyst", "Senior Product Manager, SOC Experience", False),
     ("SOC Analyst", "GRC Analyst", False),
     ("SOC Analyst", "Manager, Security Operations Center", False),
+    ("SOC Analyst", "Security Analyst", False),
+    ("NOC Technician", "Network Operations Center Technician", True),
     ("Data Analyst", "Data Analyst & IT Support Specialist", True),
     ("Data Analyst", "Senior Data Analytics Analyst", True),
     ("Data Analyst", "Shipping Management", False),
@@ -199,7 +213,36 @@ def test_matches_title_accepts_core_job_title_as_second_candidate():
 
 def test_title_tokens_drop_seniority_and_expand_abbreviations():
     assert title_tokens("Senior IT Support Specialist II") == ["information", "technology", "support", "specialist"]
-    assert title_tokens("Junior SOC Analyst") == ["security", "operations", "center", "analyst"]
+    assert title_tokens("Junior SOC Analyst") == ["security", "operations", "analyst"]
+    assert title_tokens("Security Operations Centre Analyst") == ["security", "operations", "analyst"]
+
+
+# ---------------------------------------------------------------------------
+# Age filter: the server ignores dateFetchedPastNDays, so the cut is made here.
+# ---------------------------------------------------------------------------
+
+def test_posted_days_ago_reads_the_iso_date_then_millis():
+    now = FIXTURE_DAY
+    assert posted_days_ago({"v5_processed_job_data": {"estimated_publish_date": "2026-10-20T04:34:41.000Z"}}, now) == 0
+    assert posted_days_ago({"v5_processed_job_data": {"estimated_publish_date": "2026-10-12T23:00:00.000Z"}}, now) == 8
+    millis = int((now - timedelta(days=30)).timestamp() * 1000)
+    assert posted_days_ago({"v5_processed_job_data": {"estimated_publish_date_millis": millis}}, now) == 30
+    # The ISO string wins when both are present.
+    assert posted_days_ago({"v5_processed_job_data": {"estimated_publish_date": "2026-10-19T00:00:00Z",
+                                                      "estimated_publish_date_millis": millis}}, now) == 1
+    # A clock skew in the future is not a negative age.
+    assert posted_days_ago({"v5_processed_job_data": {"estimated_publish_date": "2026-10-21T12:00:00.000Z"}}, now) == 0
+
+
+def test_posted_days_ago_is_none_without_a_usable_date():
+    assert posted_days_ago({}, FIXTURE_DAY) is None
+    assert posted_days_ago({"v5_processed_job_data": {"estimated_publish_date": ""}}, FIXTURE_DAY) is None
+    assert posted_days_ago({"v5_processed_job_data": {"estimated_publish_date": "last week"}}, FIXTURE_DAY) is None
+    assert posted_days_ago({"v5_processed_job_data": {"estimated_publish_date_millis": 0}}, FIXTURE_DAY) is None
+
+
+def test_fixture_hits_are_all_fresh_on_their_capture_day(hits):
+    assert [posted_days_ago(h, FIXTURE_DAY) for h in hits] == [0, 1, 1, 0]
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +302,17 @@ def test_matches_location_for_a_metro_uses_coordinates(hits):
     assert not matches_location(by_company(hits, "Transdev North America"), nyc)  # Lombard, IL
 
 
+def test_matches_location_accepts_a_single_point_or_garbage_in_geoloc():
+    nyc = location_spec("New York")
+    v5 = {"formatted_workplace_location": "Somewhere", "workplace_type": "Onsite"}
+    # Algolia allows _geoloc to be one object rather than a list.
+    assert matches_location({"_geoloc": {"lat": 40.7128, "lon": -74.006}, "v5_processed_job_data": v5}, nyc)
+    assert not matches_location({"_geoloc": {"lat": 34.05, "lon": -118.24}, "v5_processed_job_data": v5}, nyc)
+    # Odd entries are skipped instead of raising out of the scrape loop.
+    assert not matches_location({"_geoloc": [None, "40.7,-74.0", {"lat": "40.7", "lon": None}], "v5_processed_job_data": v5}, nyc)
+    assert matches_location({"_geoloc": [None, {"lat": 40.7128, "lon": -74.006}], "v5_processed_job_data": v5}, nyc)
+
+
 def test_matches_location_metro_falls_back_to_text_without_coordinates():
     hit = {"_geoloc": [], "v5_processed_job_data": {
         "formatted_workplace_location": "Barcelona or New York City or Beijing",
@@ -300,7 +354,7 @@ class FakeResponse:
         self.headers = headers or {}
 
 
-def run_scrape(monkeypatch, responses, titles, locations, limit=20):
+def run_scrape(monkeypatch, responses, titles, locations, limit=20, now=FIXTURE_DAY):
     calls = []
 
     async def fake_get(client, url):
@@ -309,6 +363,7 @@ def run_scrape(monkeypatch, responses, titles, locations, limit=20):
         return resp
 
     monkeypatch.setattr(hiringcafe, "_get", fake_get)
+    monkeypatch.setattr(hiringcafe, "_now", lambda: now)
     monkeypatch.setattr(hiringcafe.asyncio, "sleep", _no_sleep)
     jobs = asyncio.run(hiringcafe.scrape(titles, locations, limit=limit))
     return jobs, calls
@@ -339,6 +394,37 @@ def test_scrape_respects_limit(monkeypatch):
     jobs, calls = run_scrape(monkeypatch, [FakeResponse(SEARCH_HTML)], ["IT Support Specialist"], ["New York", "Remote"], limit=1)
     assert len(jobs) == 1
     assert len(calls) == 1
+
+
+def test_scrape_drops_hits_older_than_the_window(monkeypatch):
+    # Age the Lehman College hit by seven weeks; it still matches the title
+    # and the New York metro, and must still be left out.
+    lehman_date = "2026-10-20T04:34:41.000Z"
+    assert SEARCH_HTML.count(lehman_date) == 1
+    stale_html = SEARCH_HTML.replace(lehman_date, "2026-09-01T04:34:41.000Z")
+    jobs, _ = run_scrape(monkeypatch, [FakeResponse(stale_html)], ["IT Support Specialist"], ["New York"])
+    assert [j.company for j in jobs] == ["Colure Health"]
+
+
+def test_scrape_drops_everything_once_the_fixture_ages_out(monkeypatch):
+    # Same page, clock moved three weeks past capture: nothing is fresh.
+    jobs, _ = run_scrape(monkeypatch, [FakeResponse(SEARCH_HTML)], ["IT Support Specialist"], ["New York"],
+                         now=FIXTURE_DAY + timedelta(days=21))
+    assert jobs == []
+
+
+def test_scrape_keeps_hits_that_carry_no_date(monkeypatch):
+    # Rebuild the page with every date removed from the __NEXT_DATA__ blob.
+    m = hiringcafe.NEXT_DATA_RE.search(SEARCH_HTML)
+    data = json.loads(m.group(1))
+    for hit in data["props"]["pageProps"]["ssrHits"]:
+        hit["v5_processed_job_data"].pop("estimated_publish_date", None)
+        hit["v5_processed_job_data"].pop("estimated_publish_date_millis", None)
+    page = SEARCH_HTML[:m.start(1)] + json.dumps(data) + SEARCH_HTML[m.end(1):]
+    assert all(posted_days_ago(h, FIXTURE_DAY) is None for h in parse_search_page(page))
+    jobs, _ = run_scrape(monkeypatch, [FakeResponse(page)], ["IT Support Specialist"], ["New York"],
+                         now=FIXTURE_DAY + timedelta(days=365))
+    assert {j.company for j in jobs} == {"Lehman College", "Colure Health"}
 
 
 def test_scrape_returns_nothing_on_a_cloudflare_challenge(monkeypatch):
@@ -390,6 +476,7 @@ def test_request_errors_keep_the_url_at_debug(monkeypatch):
         raise httpx.ConnectError(f"connection refused for {url}")
 
     monkeypatch.setattr(hiringcafe, "_get", failing_get)
+    monkeypatch.setattr(hiringcafe, "_now", lambda: FIXTURE_DAY)
     monkeypatch.setattr(hiringcafe.asyncio, "sleep", _no_sleep)
     try:
         jobs = asyncio.run(hiringcafe.scrape(["IT Support Specialist"], ["New York"]))
