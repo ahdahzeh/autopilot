@@ -234,9 +234,10 @@ def tag_nyc(location: str, tenant: str = "") -> str:
 # roles to a New York user on the first real run (2026-10-20). A remote
 # posting counts for a remote target only when it names the US, or names no
 # country at all.
-_US_MARKERS = (
-    "usa", "u.s.", "united states", "us -", "us,", "us remote", "remote us",
-    "remote - us", "remote (us", "- us", "(us)", "americas", "nationwide",
+# Word-bounded so "Pune Campus, Remote" does not read as "us,". A plain
+# substring list matched "campus" and "- usa" alike.
+_US_MARKERS = re.compile(
+    r"\b(?:usa|united states|us|americas|nationwide)\b|\bu\.s\.", re.I
 )
 _NON_US_COUNTRIES = (
     "united kingdom", "uk", "gbr", "england", "scotland", "ireland", "canada", "mexico",
@@ -251,13 +252,17 @@ _NON_US_COUNTRIES = (
 
 
 def remote_counts_for_target(location: str) -> bool:
-    low = f" {(location or '').lower()} "
-    if any(m in low for m in _US_MARKERS):
+    low = (location or "").lower()
+    if _US_MARKERS.search(low):
         return True
-    # US state abbreviations after a comma ("Remote, NY") or a US city name
-    # are common; a bare country name without any of those is the signal.
-    if re.search(r",\s*[A-Z]{2}\b", location or ""):
-        return True
+    # A named non-US country decides it. This check has to come before any
+    # "City, XX" heuristic: a two-letter code after a comma is as often a
+    # country or province ("Remote, UK", "Bengaluru, KA, India", "Mexico City,
+    # MX") as a US state, and reading it as a state let those through
+    # (review, 2026-10-21). With no country named at all ("Remote", "Remote,
+    # NY", "Toronto, ON") the posting counts; _to_listing appends the country
+    # from the detail payload for non-US postings, so the detail-time re-check
+    # still catches "Toronto, ON" once it reads "Toronto, ON (Canada)".
     return not any(re.search(rf"\b{re.escape(c)}\b", low) for c in _NON_US_COUNTRIES)
 
 

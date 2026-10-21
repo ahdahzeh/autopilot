@@ -402,6 +402,17 @@ def test_build_queries_default_cap_covers_a_per_scholas_profile():
         ("Japan - Remote, Tokyo", False),
         ("Canada - Remote ON", False),
         ("Remote (Japan)", False),
+        # A two-letter code after a comma is not proof of a US state (review, 2026-10-21).
+        ("Remote, UK", False),
+        ("London, UK - Remote", False),
+        ("Bengaluru, KA, India (Remote)", False),
+        ("Hybrid - Mexico City, MX", False),
+        ("Toronto, ON - Remote (Canada)", False),
+        # "campus" must not read as the "us" marker.
+        ("Pune Campus, Remote, India", False),
+        ("Remote - US", True),
+        ("US-Remote", True),
+        ("Remote (U.S.)", True),
     ],
 )
 def test_remote_counts_for_target(location, expected):
@@ -413,6 +424,7 @@ def test_location_ok_drops_literal_remote_substring_outside_us():
     assert workday.location_ok("USA - Remote", ["New York", "Remote"], True)
     assert workday.location_ok("Purchase, New York", ["New York"], False)
     assert not workday.location_ok("Dubai, United Arab Emirates", ["New York", "Remote"], False)
+    assert not workday.location_ok("Remote, UK", ["New York, NY", "Remote"], True)
 
 
 @pytest.mark.parametrize(
