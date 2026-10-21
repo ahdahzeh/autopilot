@@ -151,6 +151,7 @@ export async function processDailyDigest(): Promise<CampaignSummary> {
     .from("profiles")
     .select("id, display_name, digest_email_last_at, emails_opted_out, unsubscribe_token, gmail_connected")
     .eq("onboarded", true)
+    .is("hired_at", null) // paused after "I got a job"
     .eq("emails_opted_out", false)
     .eq("gmail_connected", true);
 
@@ -250,7 +251,8 @@ export async function processEngagementEmails(): Promise<CampaignSummary> {
   const { data: profiles, error } = await svc
     .from("profiles")
     .select("id, display_name, engagement_email_last_at, emails_opted_out, unsubscribe_token")
-    .eq("onboarded", true);
+    .eq("onboarded", true)
+    .is("hired_at", null); // paused after "I got a job"
 
   if (error || !profiles) {
     summary.errors.push(`fetch profiles: ${error?.message ?? "unknown"}`);

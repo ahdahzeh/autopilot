@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { ResumeUpload } from "@/components/resume-upload";
+import { JobSearchStatus } from "@/components/job-search-status";
 import { TONES, MODELS, type Tone, type ModelChoice } from "@/lib/tailor-prompts";
 import { TRACK_PRESET_LIST, getTrackPreset } from "@/lib/track-presets";
 
@@ -514,6 +515,11 @@ export default function SettingsPage() {
             </button>
           </div>
         </div>
+
+        {/* Job search: "I got a job" pauses the daily search */}
+        <Section title="Job Search">
+          <JobSearchStatus />
+        </Section>
 
         {/* Profile */}
         <Section title="Profile">

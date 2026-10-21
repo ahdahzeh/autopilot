@@ -104,7 +104,9 @@ async function main(): Promise<void> {
   const { data: users, error } = await supabase
     .from("profiles")
     .select("id")
-    .eq("onboarded", true);
+    .eq("onboarded", true)
+    // Users who marked "I got a job" are paused until they resume in Settings.
+    .is("hired_at", null);
 
   if (error) throw new Error(`could not load users: ${error.message}`);
   const everyone = (users ?? []).map((u) => u.id as string);

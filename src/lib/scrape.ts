@@ -30,6 +30,10 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
     return { user_id: userId, skipped: true, reason: "user not found" };
   }
 
+  if (user.hired_at) {
+    return { user_id: userId, skipped: true, reason: "search paused: got a job" };
+  }
+
   if (!user.onboarded) {
     return { user_id: userId, skipped: true, reason: "not onboarded" };
   }
