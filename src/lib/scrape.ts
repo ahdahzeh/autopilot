@@ -124,6 +124,13 @@ export async function scrapeForUser(userId: string): Promise<ScrapeResult> {
         negative_companies: negativeCompanies,
       }),
     });
+    // A scraper-side failure (FastAPI's 500 with {detail}) used to be spread
+    // into the result with no error key, so it counted as "ok, 0 jobs" and
+    // the ingest job's majority-errored rule could never see it.
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { user_id: user.id, error: `scraper returned ${res.status}: ${body.slice(0, 200)}` };
+    }
     const data = await res.json();
     return { user_id: user.id, ...data };
   } catch (err) {

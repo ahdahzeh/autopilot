@@ -5,9 +5,12 @@ import { NextRequest } from "next/server";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  // Called by cron or manually
+  // Called by the daily ingest workflow. Fails closed: CRON_SECRET was never
+  // set in production, and the old "only check when set" guard left this
+  // route syncing every user's Gmail for anyone who called it.
+  const secret = process.env.CRON_SECRET;
   const authHeader = request.headers.get("authorization");
-  if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!secret || authHeader !== `Bearer ${secret}`) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 

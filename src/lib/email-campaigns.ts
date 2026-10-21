@@ -12,6 +12,7 @@
  * Both honor `profiles.emails_opted_out`.
  */
 
+import { createHash } from "node:crypto";
 import { createServiceClient } from "./supabase/server";
 import {
   renderOnboardingReminder,
@@ -24,6 +25,27 @@ import {
   type DailyDigestJob,
 } from "./emails";
 import { captureError } from "./sentry";
+
+// listUsers() returns one page of 50 by default. With 33 users that was every
+// account, but the Per Scholas cohort pushes the total past 50, and every user
+// on a later page would have been silently skipped by all three campaigns.
+async function loadEmailsById(svc: ReturnType<typeof createServiceClient>): Promise<Record<string, string>> {
+  const emailById: Record<string, string> = {};
+  const perPage = 1000;
+  for (let page = 1; ; page++) {
+    const { data, error } = await svc.auth.admin.listUsers({ page, perPage });
+    if (error) throw new Error(`list auth users page ${page}: ${error.message}`);
+    const users = data?.users ?? [];
+    for (const u of users) emailById[u.id] = (u.email || "").trim();
+    if (users.length < perPage) return emailById;
+  }
+}
+
+// GitHub Actions logs are public, so log lines and error summaries name a user
+// by a short hash of their id, never their email address.
+function userTag(id: string): string {
+  return `user:${createHash("sha1").update(id).digest("hex").slice(0, 8)}`;
+}
 
 type CampaignSummary = {
   eligible: number;
@@ -52,9 +74,7 @@ export async function processOnboardingReminders(): Promise<CampaignSummary> {
   }
 
   // Fetch auth emails via the service client admin API.
-  const { data: authList } = await svc.auth.admin.listUsers();
-  const emailById: Record<string, string> = {};
-  for (const u of authList?.users ?? []) emailById[u.id] = (u.email || "").trim();
+  const emailById = await loadEmailsById(svc);
 
   const now = Date.now();
 
@@ -91,7 +111,7 @@ export async function processOnboardingReminders(): Promise<CampaignSummary> {
 
     const result = await sendEmail(payload);
     if (!result.ok) {
-      summary.errors.push(`${email}: ${result.error ?? "send failed"}`);
+      summary.errors.push(`${userTag(p.id)}: ${result.error ?? "send failed"}`);
       continue;
     }
 
@@ -111,10 +131,15 @@ export async function processOnboardingReminders(): Promise<CampaignSummary> {
 // Runs alongside the other two campaigns. Targets onboarded users with an
 // active Gmail connection (gmail_connected=true) and who have at least 3
 // scored matches in the last 24h — a 1- or 2-job digest isn't worth an email.
-// Throttled to once per 20 hours via profiles.digest_email_last_at.
+// Throttled via profiles.digest_email_last_at to one send per run.
+//
+// The gap was 20 hours, but the digest now runs after GitHub Actions ingest,
+// whose scheduled start drifts by 3 to 6 hours. Two consecutive runs can land
+// 18 hours apart, and a 20 hour gap would skip that day's digest. 14 hours
+// still blocks a same-day double send from a manual rerun.
 
 const DIGEST_MIN_MATCHES = 3;
-const DIGEST_MIN_HOURS_BETWEEN_SENDS = 20;
+const DIGEST_MIN_HOURS_BETWEEN_SENDS = 14;
 const DIGEST_WINDOW_HOURS = 24;
 
 export async function processDailyDigest(): Promise<CampaignSummary> {
@@ -134,9 +159,7 @@ export async function processDailyDigest(): Promise<CampaignSummary> {
     return summary;
   }
 
-  const { data: authList } = await svc.auth.admin.listUsers();
-  const emailById: Record<string, string> = {};
-  for (const u of authList?.users ?? []) emailById[u.id] = (u.email || "").trim();
+  const emailById = await loadEmailsById(svc);
 
   const now = Date.now();
   const since = new Date(now - DIGEST_WINDOW_HOURS * 3600_000).toISOString();
@@ -144,7 +167,7 @@ export async function processDailyDigest(): Promise<CampaignSummary> {
   for (const p of profiles) {
     summary.eligible += 1;
 
-    // Throttle: <20h since last digest means skip.
+    // Throttle: under DIGEST_MIN_HOURS_BETWEEN_SENDS since the last digest means skip.
     if (p.digest_email_last_at) {
       const hoursSince = (now - new Date(p.digest_email_last_at).getTime()) / 3600_000;
       if (hoursSince < DIGEST_MIN_HOURS_BETWEEN_SENDS) { summary.skipped += 1; continue; }
@@ -179,7 +202,7 @@ export async function processDailyDigest(): Promise<CampaignSummary> {
       }));
 
     if (eligibleJobs.length < DIGEST_MIN_MATCHES) {
-      console.log(`[daily-digest] skip ${email}: only ${eligibleJobs.length} eligible match${eligibleJobs.length === 1 ? "" : "es"}`);
+      console.log(`[daily-digest] skip ${userTag(p.id)}: only ${eligibleJobs.length} eligible match${eligibleJobs.length === 1 ? "" : "es"}`);
       summary.skipped += 1;
       continue;
     }
@@ -194,13 +217,13 @@ export async function processDailyDigest(): Promise<CampaignSummary> {
     try {
       const result = await sendEmail(payload);
       if (!result.ok) {
-        captureError(new Error(`daily digest send failed: ${result.error ?? "unknown"}`), { email, userId: p.id });
-        summary.errors.push(`${email}: ${result.error ?? "send failed"}`);
+        captureError(new Error(`daily digest send failed: ${result.error ?? "unknown"}`), { user: userTag(p.id) });
+        summary.errors.push(`${userTag(p.id)}: ${result.error ?? "send failed"}`);
         continue;
       }
     } catch (err) {
-      captureError(err, { email, userId: p.id, scope: "daily-digest-send" });
-      summary.errors.push(`${email}: ${String(err)}`);
+      captureError(err, { user: userTag(p.id), scope: "daily-digest-send" });
+      summary.errors.push(`${userTag(p.id)}: ${String(err)}`);
       continue;
     }
 
@@ -234,9 +257,7 @@ export async function processEngagementEmails(): Promise<CampaignSummary> {
     return summary;
   }
 
-  const { data: authList } = await svc.auth.admin.listUsers();
-  const emailById: Record<string, string> = {};
-  for (const u of authList?.users ?? []) emailById[u.id] = (u.email || "").trim();
+  const emailById = await loadEmailsById(svc);
 
   const now = Date.now();
 
@@ -295,7 +316,7 @@ export async function processEngagementEmails(): Promise<CampaignSummary> {
 
     const result = await sendEmail(payload);
     if (!result.ok) {
-      summary.errors.push(`${email}: ${result.error ?? "send failed"}`);
+      summary.errors.push(`${userTag(p.id)}: ${result.error ?? "send failed"}`);
       continue;
     }
 

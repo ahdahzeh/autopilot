@@ -20,7 +20,8 @@ export type EmailPayload = {
 export async function sendEmail(payload: EmailPayload): Promise<{ ok: boolean; error?: string }> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
-    console.warn("[emails] RESEND_API_KEY not set — skipping send to", payload.to);
+    // No recipient in the log: these lines reach public GitHub Actions logs.
+    console.warn("[emails] RESEND_API_KEY not set, skipping send");
     return { ok: false, error: "resend not configured" };
   }
 
