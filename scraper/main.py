@@ -101,6 +101,20 @@ SOURCE_TIMEOUTS = {
 MIN_INSERT_SCORE = int(os.getenv("MIN_INSERT_SCORE", "3"))
 MIN_INSERT_SCORE_HEURISTIC = int(os.getenv("MIN_INSERT_SCORE_HEURISTIC", "0"))
 
+# Countries Autopilot does not serve, whatever a user typed as a target. The
+# product is US-focused (the Per Scholas NYC cohort), and on 2026-10-21 nine
+# India listings reached users who had Pune, Bengaluru or Hyderabad in their
+# targets. Those targets are skipped before searching, so no search budget goes
+# to them, and any job placed in one of these countries is dropped before
+# insert, whichever source found it. Keys match linkedin.country_of().
+BLOCKED_COUNTRIES = {
+    c.strip().lower() for c in os.getenv("BLOCKED_COUNTRIES", "india").split(",") if c.strip()
+}
+
+
+def _blocked_country(location: str) -> bool:
+    return linkedin.country_of(location) in BLOCKED_COUNTRIES
+
 
 def short_user(user_id: str) -> str:
     """First 8 hex chars of sha256(user_id).
@@ -215,6 +229,14 @@ async def _scrape_inner(req: ScrapeRequest):
         f"Scrape request detail: titles={req.target_titles}, locations={req.target_locations}, "
         f"sources={req.sources}"
     )
+
+    kept_locations = [loc for loc in req.target_locations if not _blocked_country(loc)]
+    if len(kept_locations) != len(req.target_locations):
+        logger.info(
+            f"Skipped {len(req.target_locations) - len(kept_locations)} target location(s) "
+            f"in blocked countries for user={user_tag}"
+        )
+        req.target_locations = kept_locations
 
     if not req.target_titles or not req.target_locations:
         return {"jobs_added": 0, "message": "No titles or locations configured"}
@@ -362,6 +384,11 @@ async def _scrape_inner(req: ScrapeRequest):
 
     # Deduplicate
     unique_jobs = deduplicate(all_jobs, existing_keys)
+
+    before = len(unique_jobs)
+    unique_jobs = [j for j in unique_jobs if not _blocked_country(j.location)]
+    if len(unique_jobs) != before:
+        logger.info(f"Blocked-country filter: {before} -> {len(unique_jobs)}")
 
     # Filter by salary floor
     if req.salary_floor > 0:
