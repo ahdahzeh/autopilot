@@ -399,10 +399,10 @@ export default function SettingsPage() {
       }
 
       // The date input gives a calendar day; the code stays valid through
-      // the end of that day in the admin's timezone.
+      // the end of that day in the admin's timezone, so today still passes.
       const expires = new Date(`${newInviteExpires}T23:59:59`);
       if (Number.isNaN(expires.getTime()) || expires.getTime() <= Date.now()) {
-        setInviteError("Choose an expiry date after today");
+        setInviteError("Choose an expiry date of today or later");
         return;
       }
 

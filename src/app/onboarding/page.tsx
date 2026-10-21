@@ -214,10 +214,21 @@ export default function OnboardingPage() {
         const inviteRow = inviteResult.data as
           | { code?: string; label?: string | null; prefilled_fields?: unknown }
           | null;
-        if (!inviteResult.error && inviteRow?.code) {
+        // The skip rules hide steps on the promise that the profile row already
+        // holds the answers, so the invite only counts when the profile read
+        // came back too. Without this a member whose profile fetch failed
+        // would reach review with empty roles, a disabled finish button and no
+        // step left to type them in.
+        if (!inviteResult.error && inviteRow?.code && profile) {
           inviteFields = Array.isArray(inviteRow.prefilled_fields)
             ? inviteRow.prefilled_fields.filter((f): f is string => typeof f === "string")
             : [];
+          // Same guard for the two fields review insists on: if the row does
+          // not actually hold them (a code whose prefill carried empty lists),
+          // keep the roles + locations step visible.
+          if (!(profile.target_titles?.length > 0) || !(profile.target_locations?.length > 0)) {
+            inviteFields = inviteFields.filter((f) => f !== "target_titles" && f !== "target_locations");
+          }
           setInvite({ code: inviteRow.code, label: inviteRow.label ?? null, prefilledFields: inviteFields });
         }
 
@@ -431,27 +442,34 @@ export default function OnboardingPage() {
   const safeStep = Math.min(step, totalSteps - 1);
   const stepKey = stepKeys[safeStep];
 
+  // An invite that answered every question (the Per Scholas presets) earns the
+  // "most of your setup is done" welcome. One that only set roles and
+  // locations (a custom code from Settings) still has family, preferences,
+  // sources and focus ahead, so it gets the normal welcome plus the prefill
+  // note instead of a promise the flow does not keep.
+  const fullInvite = invite && !stepKeys.some((key) => STEP_PREREQS[key]) ? invite : null;
+
   const stepViews: Record<StepKey, React.ReactNode> = {
     welcome: (
       <div className="text-center space-y-4">
         <h2 className="text-lg font-bold">
           {returningUser
             ? "Welcome back, let's finish up"
-            : invite
+            : fullInvite
               ? "Most of your setup is done"
               : "Let's set up your job search"}
         </h2>
         <p className="text-sm text-muted">
           {returningUser
             ? "We saved what you already entered. Click through to review and finish setting up."
-            : invite
-              ? `Your ${invite.label ? `${invite.label} ` : ""}invite already set your ${describePrefilled(invite.prefilledFields)}. What's left: upload your resume, connect Gmail if you want to, and review. Everything can be changed later in Settings.`
+            : fullInvite
+              ? `Your ${fullInvite.label ? `${fullInvite.label} ` : ""}invite already set your ${describePrefilled(fullInvite.prefilledFields)}. What's left: upload your resume, connect Gmail if you want to, and review. Everything can be changed later in Settings.`
               : "Tell us what you're looking for and we'll find jobs for you every day. Takes about two minutes."}
         </p>
         <p className="text-[10px] text-muted mono uppercase tracking-widest">
           {totalSteps} quick steps
         </p>
-        {prefilled && !returningUser && !invite && (
+        {prefilled && !returningUser && !fullInvite && (
           <p className="text-xs text-accent-purple">
             We pre-filled some preferences from your invite. Feel free to edit.
           </p>
@@ -744,11 +762,8 @@ export default function OnboardingPage() {
       <div className="space-y-4">
         <h2 className="text-sm font-bold">Review your setup</h2>
         <div className="bg-card border border-border rounded-xl p-4 space-y-3 text-xs">
-          {invite ? (
-            <Row label="Invite" value={invite.label ?? invite.code} />
-          ) : (
-            <Row label="Role family" value={currentFamily.label} />
-          )}
+          {invite && <Row label="Invite" value={invite.label ?? invite.code} />}
+          {stepKeys.includes("family") && <Row label="Role family" value={currentFamily.label} />}
           <Row label="Roles" value={titles || "Not set"} />
           <Row label="Locations" value={locations || "Not set"} />
           <Row label="Min Salary" value={salaryFloor ? `$${salaryFloor.toLocaleString()}` : "Any"} />
