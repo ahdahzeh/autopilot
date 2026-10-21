@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import type { Job, DismissReason } from "@/lib/types";
 import { createClient } from "@/lib/supabase/client";
 import { showToast } from "@/components/toast";
+import { BILLING_PATH, type BillingState } from "@/lib/billing";
 
 type FeedbackType =
   | "wrong_seniority"
@@ -78,6 +79,18 @@ const initialBlock = <T,>(): BlockState<T> => ({
   error: null,
 });
 
+// Cap and credit state from GET /api/billing/status, shown under the Tailor
+// button so nobody learns about the daily limit from a 429.
+async function fetchBillingState(): Promise<BillingState | null> {
+  try {
+    const res = await fetch("/api/billing/status");
+    if (!res.ok) return null;
+    return (await res.json()) as BillingState;
+  } catch {
+    return null;
+  }
+}
+
 export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("overview");
   // Prefill from the scraper-stored description so users only have to hit
@@ -99,6 +112,8 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [autoCoverDrafting, setAutoCoverDrafting] = useState(false);
+  const [billing, setBilling] = useState<BillingState | null>(null);
+  const [capReached, setCapReached] = useState(false);
 
   // Only render the portal after mount so SSR doesn't try to reach for
   // document.body. Also lock body scroll while open.
@@ -115,6 +130,18 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
     return () => {
       abortRef.current?.abort();
       autoCoverAbortRef.current?.abort();
+    };
+  }, []);
+
+  // Cap and credit state, loaded once per open and refreshed after each run
+  // so the count under the Tailor button stays honest.
+  useEffect(() => {
+    let cancelled = false;
+    fetchBillingState().then((s) => {
+      if (!cancelled && s) setBilling(s);
+    });
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -160,10 +187,16 @@ export function JobDetailModal({ job, onClose }: { job: Job; onClose: () => void
             company: job.company || job.name,
             jobId: job.id,
             blocks: ["cover"],
+            // Never spend a paid credit on something the user did not click.
+            spendCredit: false,
           }),
         });
         if (!res.ok || !res.body) {
-          setCover({ status: "error", data: null, error: "Auto-draft failed." });
+          const text = await res.text().catch(() => "");
+          let parsed: { error?: string; code?: string } | null = null;
+          try { parsed = JSON.parse(text); } catch {}
+          if (parsed?.code === "cap_reached") setCapReached(true);
+          setCover({ status: "error", data: null, error: parsed?.error || "Auto-draft failed." });
           return;
         }
         const reader = res.body.getReader();
@@ -320,6 +353,7 @@ Apply: ${job.applyLink || "-"}`;
     setAutoCoverDrafting(false);
     setRunning(true);
     setGeneralError(null);
+    setCapReached(false);
     // Optimistically set every block to "running" the moment the user clicks.
     // The server will later confirm with its own "start" events, but this way
     // the user immediately sees the loading dots even if the SSE stream is
@@ -353,10 +387,11 @@ Apply: ${job.applyLink || "-"}`;
 
       if (!res.ok || !res.body) {
         const text = await res.text().catch(() => "");
-        let parsed: { error?: string } | null = null;
+        let parsed: { error?: string; code?: string } | null = null;
         try { parsed = JSON.parse(text); } catch {}
         const msg = parsed?.error || `Tailoring failed (${res.status}). Try again.`;
         setGeneralError(msg);
+        setCapReached(parsed?.code === "cap_reached");
         // Surface the failure on every block so the user isn't stuck on the
         // running spinner forever.
         setMatch({ status: "error", data: null, error: msg });
@@ -399,6 +434,9 @@ Apply: ${job.applyLink || "-"}`;
         }
       }
       console.log("[tailor] stream closed");
+      fetchBillingState().then((s) => {
+        if (s) setBilling(s);
+      });
     } catch (err: any) {
       if (err?.name === "AbortError") return;
       console.error("[tailor] fetch failed", err);
@@ -612,6 +650,8 @@ Apply: ${job.applyLink || "-"}`;
                   running={running}
                   hasResults={hasResults}
                   generalError={generalError}
+                  billing={billing}
+                  capReached={capReached}
                 />
               )}
               {tab === "match" && <MatchTab state={match} />}
@@ -659,6 +699,8 @@ function OverviewTab({
   running,
   hasResults,
   generalError,
+  billing,
+  capReached,
 }: {
   job: Job;
   jobDescription: string;
@@ -667,6 +709,8 @@ function OverviewTab({
   running: boolean;
   hasResults: boolean;
   generalError: string | null;
+  billing: BillingState | null;
+  capReached: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -713,7 +757,19 @@ function OverviewTab({
           placeholder="Paste the full job description here..."
           className="w-full px-3 py-2 text-xs border border-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-accent-purple/30 resize-none font-mono"
         />
-        {generalError && <p className="text-xs text-accent-red mt-2">{generalError}</p>}
+        {generalError && (
+          <p className="text-xs text-accent-red mt-2">
+            {generalError}
+            {capReached && (
+              <>
+                {" "}
+                <a href={BILLING_PATH} className="font-medium underline hover:opacity-70">
+                  {billing?.paymentsEnabled ? "Buy credits" : "View usage"}
+                </a>
+              </>
+            )}
+          </p>
+        )}
         <button
           onClick={generate}
           disabled={running || jobDescription.trim().length < 50}
@@ -724,6 +780,32 @@ function OverviewTab({
         <p className="text-[10px] text-muted mt-2">
           Runs 5 passes: match score, bullets, cover letter, level strategy, interview prep.
         </p>
+        {billing && (
+          <p className="text-[10px] text-muted mt-1">
+            {billing.hasOwnKey ? (
+              "Using your own Anthropic key. No daily cap."
+            ) : (
+              <>
+                <span className="mono">{billing.usedToday}</span> of{" "}
+                <span className="mono">{billing.dailyLimit}</span> free tailors used today
+                {billing.credits > 0 && (
+                  <>
+                    , <span className="mono">{billing.credits}</span>{" "}
+                    {billing.credits === 1 ? "credit" : "credits"} left
+                  </>
+                )}
+                {billing.paymentsEnabled && (
+                  <>
+                    {" · "}
+                    <a href={BILLING_PATH} className="text-accent-purple hover:opacity-70">
+                      {billing.credits > 0 ? "Manage credits" : "Buy credits"}
+                    </a>
+                  </>
+                )}
+              </>
+            )}
+          </p>
+        )}
       </div>
     </div>
   );

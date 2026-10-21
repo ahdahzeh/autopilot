@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "eval:models": "tsx scripts/model-eval/run.ts"
+    "eval:models": "tsx scripts/model-eval/run.ts",
+    "cost:tailor": "tsx scripts/tailor-cost/run.ts",
+    "test:billing": "tsx scripts/billing/webhook-test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.67",
@@ -24,6 +26,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
+    "stripe": "^23.0.0",
     "unpdf": "^1.4.0"
   },
   "devDependencies": {

@@ -1,8 +1,16 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { generateObject, generateText, type LanguageModel } from "ai";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { captureError } from "@/lib/sentry";
+import { type PaidWith, type TokenUsage } from "@/lib/billing";
+import {
+  capReachedBody,
+  loadBillingState,
+  recordTailorEvent,
+  refundTailorCredit,
+  reserveTailor,
+} from "@/lib/billing-server";
 import {
   BLOCK_PROMPTS,
   MODELS,
@@ -27,8 +35,6 @@ import {
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const DAILY_LIMIT = 40;
-
 // Blocks that go through generateObject (auto-retry, schema-validated).
 // Everything else stays on generateText because the output is prose-shaped
 // (cover letter paragraphs, interview Q/A, referral copy) and a strict
@@ -39,12 +45,17 @@ const STRUCTURED_SCHEMAS = {
   strategy: strategySchema,
 } as const;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 type Body = {
   jobDescription: string;
   role: string;
   company: string;
   jobId?: string;
   blocks?: TailorBlock[];
+  // false: at the daily cap, refuse instead of spending a purchased credit.
+  // The modal's automatic cover draft sends this; a click on Tailor does not.
+  spendCredit?: boolean;
 };
 
 export async function POST(req: Request) {
@@ -64,19 +75,12 @@ export async function POST(req: Request) {
     return Response.json({ error: "No valid blocks requested." }, { status: 400 });
   }
 
-  const rateOk = await checkAndBumpRateLimit(supabase, user.id);
-  if (!rateOk) {
-    return Response.json(
-      {
-        error: `Daily tailoring limit reached (${DAILY_LIMIT}/day). Resets at midnight UTC. Add your own Anthropic API key in Settings to remove the cap.`,
-      },
-      { status: 429 },
-    );
-  }
-
   // Pull resume_text + resume_summary together. The summary is generated at
   // upload time for resumes >6000 chars; if it exists we feed it to the
   // model instead of an arbitrary slice of the raw text.
+  //
+  // Everything the request needs is validated before the cap or a credit is
+  // touched, so a request that fails here costs the user nothing.
   const { data: baseProfile, error: profileErr } = await supabase
     .from("profiles")
     .select("resume_text, resume_summary")
@@ -134,6 +138,40 @@ export async function POST(req: Request) {
   } else {
     model = MODELS[modelChoice].gatewayId;
   }
+  // The exact id sent to the provider, stored on every usage row so cost can
+  // be computed per model later (src/lib/billing.ts has the prices).
+  const modelId = directKey ? MODELS[modelChoice].directId : MODELS[modelChoice].gatewayId;
+
+  // Cap or credit. Under TAILOR_DAILY_LIMIT (src/lib/billing.ts, 20 since
+  // 2026-10-20, 40 before) the run counts against the free allowance; at the
+  // cap it spends a purchased credit; with neither it is refused. Users with
+  // their own Anthropic key pay Anthropic directly and are never capped.
+  // (Until 2026-10-20 this check ran before the key was loaded, so the
+  // exemption the settings page promised never applied.)
+  let paidWith: PaidWith = "own_key";
+  if (!userKey) {
+    const reservation = await reserveTailor(supabase, user.id, {
+      allowCredit: body.spendCredit !== false,
+    });
+    if (!reservation) {
+      // Loaded only on this path: the numbers pick the wording and let the
+      // modal show where the user stands without a second request.
+      const state = await loadBillingState(supabase, user.id, { hasOwnKey: false });
+      return Response.json(
+        capReachedBody(state, {
+          creditWithheld: body.spendCredit === false && state.credits > 0,
+        }),
+        { status: 429 },
+      );
+    }
+    paidWith = reservation.paidWith;
+  }
+
+  // Usage rows and refunds are written with the service role, so the log
+  // cannot be padded from a browser session.
+  const service = createServiceClient();
+  const requestId = randomUUID();
+  const jobId = body.jobId && UUID_RE.test(body.jobId) ? body.jobId : null;
 
   const promptArgs = {
     resume: resumeForPrompt,
@@ -168,7 +206,11 @@ export async function POST(req: Request) {
       };
 
       controller.enqueue(encoder.encode(`: ping\n\n`));
-      send("meta", { tone, model: modelChoice, blocks: requested });
+      send("meta", { tone, model: modelChoice, blocks: requested, paidWith });
+
+      let okBlocks = 0;
+      let abortedBlocks = 0;
+      const pendingLogs: Promise<void>[] = [];
 
       const runBlock = async (block: TailorBlock) => {
         if (clientAbort.aborted || closed) return null;
@@ -180,6 +222,7 @@ export async function POST(req: Request) {
           if (cached) {
             send("start", { block, cached: true });
             send("done", { block, data: cached });
+            okBlocks += 1;
             return cached;
           }
         }
@@ -198,25 +241,51 @@ export async function POST(req: Request) {
           block === "short_cover" ? 800 :
           1400;
 
+        // One entry per model call, so a block's row in tailor_events carries
+        // the retries it needed as well as the first attempt.
+        const calls: TokenUsage[] = [];
+        const logUsage = (ok: boolean) => {
+          if (calls.length === 0) return;
+          const total = sumUsage(calls);
+          pendingLogs.push(
+            recordTailorEvent(service, {
+              user_id: user.id,
+              request_id: requestId,
+              job_id: jobId,
+              block,
+              model: modelId,
+              calls: calls.length,
+              input_tokens: total.inputTokens,
+              output_tokens: total.outputTokens,
+              cache_read_tokens: total.cacheReadTokens ?? 0,
+              cache_write_tokens: total.cacheWriteTokens ?? 0,
+              paid_with: paidWith,
+              ok,
+            }),
+          );
+        };
+
         const schema = (STRUCTURED_SCHEMAS as Record<string, any>)[block];
         const generateOnce = async (text: string, tokens: number): Promise<any> => {
           if (schema) {
             // generateObject handles its own JSON-retry loop.
-            const { object } = await generateObject({
+            const { object, usage } = await generateObject({
               model,
               prompt: text,
               schema,
               maxOutputTokens: tokens,
               abortSignal: clientAbort,
             });
+            calls.push(usageOf(usage));
             return object;
           }
-          const { text: raw } = await generateText({
+          const { text: raw, usage } = await generateText({
             model,
             prompt: text,
             maxOutputTokens: tokens,
             abortSignal: clientAbort,
           });
+          calls.push(usageOf(usage));
           return parseJsonLoosely(raw);
         };
 
@@ -229,6 +298,7 @@ export async function POST(req: Request) {
 
           if (!parsed) {
             send("error", { block, error: "Model returned unparseable output." });
+            logUsage(false);
             return null;
           }
 
@@ -261,6 +331,8 @@ export async function POST(req: Request) {
             data: parsed,
             violations: violations.length > 0 ? violations : undefined,
           });
+          okBlocks += 1;
+          logUsage(true);
 
           if (block === "match" && body.jobId) {
             // Persist to job row + cache so the next visit is instant.
@@ -280,7 +352,9 @@ export async function POST(req: Request) {
           return parsed;
         } catch (err) {
           if (clientAbort.aborted) {
+            abortedBlocks += 1;
             send("aborted", { block });
+            logUsage(false);
             return null;
           }
           captureError(err, { route: "tailor", block, userId: user.id });
@@ -288,6 +362,7 @@ export async function POST(req: Request) {
             block,
             error: err instanceof Error ? err.message : "Unknown error.",
           });
+          logUsage(false);
           return null;
         }
       };
@@ -298,7 +373,20 @@ export async function POST(req: Request) {
       const rest = requested.filter((b) => b !== "match");
       await Promise.all(rest.map((b) => runBlock(b)));
 
-      send("complete", {});
+      // A credit that bought nothing goes back: every block failed outright
+      // and the user did not abort. Partial runs keep the charge, the same
+      // way the daily counter has always kept its slot.
+      let refunded = false;
+      if (paidWith === "credit" && okBlocks === 0 && abortedBlocks === 0) {
+        await refundTailorCredit(service, user.id);
+        refunded = true;
+      }
+
+      // The usage rows must land before the stream closes; on serverless
+      // nothing is guaranteed to run after the response ends.
+      await Promise.all(pendingLogs);
+
+      send("complete", { refunded });
       closed = true;
       try {
         controller.close();
@@ -325,6 +413,33 @@ export async function POST(req: Request) {
 
 function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
+}
+
+// The AI SDK reports cached prompt tokens separately from inputTokens, and
+// may leave any field undefined for a provider that does not report it.
+function usageOf(usage: {
+  inputTokens?: number;
+  outputTokens?: number;
+  inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
+} | undefined): TokenUsage {
+  return {
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    cacheReadTokens: usage?.inputTokenDetails?.cacheReadTokens ?? 0,
+    cacheWriteTokens: usage?.inputTokenDetails?.cacheWriteTokens ?? 0,
+  };
+}
+
+function sumUsage(calls: TokenUsage[]): TokenUsage {
+  return calls.reduce<TokenUsage>(
+    (acc, c) => ({
+      inputTokens: acc.inputTokens + c.inputTokens,
+      outputTokens: acc.outputTokens + c.outputTokens,
+      cacheReadTokens: (acc.cacheReadTokens ?? 0) + (c.cacheReadTokens ?? 0),
+      cacheWriteTokens: (acc.cacheWriteTokens ?? 0) + (c.cacheWriteTokens ?? 0),
+    }),
+    { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  );
 }
 
 function parseJsonLoosely(text: string): any | null {
@@ -375,34 +490,5 @@ async function writeMatchCache(
       );
   } catch (e) {
     captureError(e, { route: "tailor", stage: "write_match_cache" });
-  }
-}
-
-async function checkAndBumpRateLimit(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
-): Promise<boolean> {
-  const day = new Date().toISOString().slice(0, 10);
-  try {
-    const { data: row } = await supabase
-      .from("tailor_usage")
-      .select("count")
-      .eq("user_id", userId)
-      .eq("day", day)
-      .maybeSingle();
-
-    const current = (row?.count as number | undefined) ?? 0;
-    if (current >= DAILY_LIMIT) return false;
-
-    await supabase
-      .from("tailor_usage")
-      .upsert(
-        { user_id: userId, day, count: current + 1 },
-        { onConflict: "user_id,day" },
-      );
-    return true;
-  } catch (e) {
-    captureError(e, { route: "tailor", stage: "rate_limit" });
-    return true;
   }
 }
