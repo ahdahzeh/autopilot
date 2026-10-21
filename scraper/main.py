@@ -10,7 +10,7 @@ from loguru import logger
 from supabase import create_client
 
 from models import ScrapeRequest
-from scrapers import linkedin, builtin, hiringcafe, greenhouse, lever, ashby
+from scrapers import linkedin, builtin, hiringcafe, greenhouse, lever, ashby, workday
 from scrapers.dedup import deduplicate, normalize_company, normalize_title
 from scorer import score_job, is_title_relevant
 from haiku_scorer import rescore_with_haiku
@@ -30,11 +30,12 @@ SCRAPER_MAP = {
     "greenhouse": greenhouse.scrape,
     "lever": lever.scrape,
     "ashby": ashby.scrape,
+    "workday": workday.scrape,
 }
 
 # ATS scrapers iterate user-specified companies rather than running keyword
 # searches, so passing an empty companies list is a no-op for them.
-ATS_SOURCES = {"greenhouse", "lever", "ashby"}
+ATS_SOURCES = {"greenhouse", "lever", "ashby", "workday"}
 
 # Scrapers that spin up a headless Chromium. Each Playwright session eats
 # ~400MB on Railway's plan; running three in parallel OOM-killed the service

@@ -1,15 +1,17 @@
-"""Shared helpers for ATS scrapers (Greenhouse, Lever, Ashby).
+"""Shared helpers for ATS scrapers (Greenhouse, Lever, Ashby, Workday).
 
-All three expose a free, un-authed JSON endpoint per company. The flow is
+The first three expose a free, un-authed JSON endpoint per company. The flow is
 identical across them: for each tracked company, GET the board, iterate the
 listings, map to our JobListing model, return. Location/title filtering is
-handled downstream in main.py.
+handled downstream in main.py. Workday (workday.py) is search-based and runs
+its own fan-out, but shares the text/location/salary helpers below.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+import time
 from html import unescape
 from typing import Any, Callable, Iterable
 
@@ -22,6 +24,31 @@ from models import JobListing, TargetCompany
 TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 CONCURRENCY = 8  # parallel company fetches per ATS
 UA = "autopilot/1.0 (+https://autopilot.ahdahzeh.com)"
+
+
+class Deadline:
+    """Wall-clock budget a multi-request scraper checks before each request.
+
+    main.py wraps every source in asyncio.wait_for, which CANCELS the coroutine
+    at the per-source timeout and throws away everything it had collected. A
+    scraper that needs dozens of requests per run (Workday) keeps its own
+    deadline a few seconds inside that budget and returns partial results
+    instead of losing the whole pass.
+    """
+
+    def __init__(self, seconds: float):
+        self.seconds = max(0.0, float(seconds))
+        self._end = time.monotonic() + self.seconds
+
+    def remaining(self) -> float:
+        return max(0.0, self._end - time.monotonic())
+
+    def expired(self) -> bool:
+        return self.remaining() <= 0.0
+
+    def clamp(self, seconds: float) -> float:
+        """Shrink a per-request timeout so it never outlives the deadline."""
+        return max(0.1, min(seconds, self.remaining()))
 
 
 def strip_html(s: str | None) -> str:
