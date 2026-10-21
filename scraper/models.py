@@ -44,8 +44,8 @@ class JobListing(BaseModel):
 class TargetCompany(BaseModel):
     """A company whose public ATS board we'll hit directly."""
 
-    ats_type: str  # "greenhouse" | "lever" | "ashby"
-    slug: str
+    ats_type: str  # "greenhouse" | "lever" | "ashby" | "workday"
+    slug: str  # board token, or '<tenant>/<wdN>/<site>' for workday
     name: str = ""
 
 
