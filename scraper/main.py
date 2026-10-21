@@ -1,7 +1,9 @@
 """Autopilot Scraper Service — FastAPI app for Railway."""
 
 import asyncio
+import hashlib
 import os
+import sys
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -17,6 +19,13 @@ from haiku_scorer import rescore_with_haiku
 from source_stats import write_source_stats
 
 load_dotenv()
+
+# Loguru's default sink emits DEBUG and up, and uvicorn's --log-level only
+# governs uvicorn's own logger, so anything demoted to DEBUG below would still
+# land in the public GitHub Actions log. Pin the level here; LOG_LEVEL=DEBUG
+# locally when the search terms are needed to debug a run.
+logger.remove()
+logger.add(sys.stderr, level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 app = FastAPI(title="Autopilot Scraper", version="1.0.0")
 
@@ -59,6 +68,82 @@ SOURCE_TIMEOUTS = {
     "lever": 45,
     "ashby": 45,
 }
+
+# Global score floor, applied on top of the user's own min_match_score (the
+# max of the two wins). min_match_score defaults to 0 (14 of 17 onboarded
+# users never changed it), so until 2026-10-20 every scored job was inserted:
+# of the 387 jobs created since 2026-10-16, 138 (36%) had match_score 0-2.
+# Haiku's own rubric calls raw 0-30 "wrong role/level", and a stored
+# match_score of 2 is raw <= 25 (round(25 / 10) == 2), so 3 is the first value
+# that is not "wrong role". Measured 2026-10-20 (read-only, all-time): of the
+# 750 Haiku-scored rows users have ever seen, 169 scored 0-2 and 3 of those
+# were acted on (applied or moved out of New), against 86 of the 581 scored
+# 3+: a 1.8% vs 14.8% action rate, and 3 of the 7 "not a fit" feedback rows
+# sit on score-2 jobs. In the 2026-10-16 window a floor of 3 drops 120 of the
+# 369 Haiku-scored rows (33%: HiringCafe 58 of 58, BuiltIn 39, LinkedIn 12)
+# and keeps the 3-4 band (76 rows, 21%) that Haiku calls tangential and that
+# users do act on (21 all-time applies at 4). The daily cap is applied before
+# scoring, so every dropped job is a slot the user does not get back.
+#
+# Heuristic-only scores sit on a different, compressed scale and are exempt
+# by default. Recomputing scorer.score_job for the 369 Haiku-scored rows with
+# the owning user's real resume and titles: of the 150 jobs Haiku rated 7 or
+# higher, 44 (29%) score only 1-2 on the heuristic, so a floor of 3 there
+# would drop nearly a third of the good jobs whenever Haiku is unavailable (no
+# API key, no credits, a failed call) or a job falls outside the top-20 batch.
+# MIN_INSERT_SCORE_HEURISTIC is the knob if that changes (no job Haiku rated
+# 7+ scored a heuristic 0, so 1 is the safe value). It never applies without
+# a resume, because score_job returns 0 for every job then and the number
+# carries no information (all 18 heuristic-only rows since 2026-10-16 were
+# one resume-less user's, all 0).
+MIN_INSERT_SCORE = int(os.getenv("MIN_INSERT_SCORE", "3"))
+MIN_INSERT_SCORE_HEURISTIC = int(os.getenv("MIN_INSERT_SCORE_HEURISTIC", "0"))
+
+
+def short_user(user_id: str) -> str:
+    """First 8 hex chars of sha256(user_id).
+
+    Enough to correlate the log lines of one run without putting the id itself
+    into the public GitHub Actions log. scripts/cleanup/dismiss-junk.ts prints
+    the same hash so counts can be matched across the two.
+    """
+    return hashlib.sha256((user_id or "").encode()).hexdigest()[:8]
+
+
+def insert_floor(
+    user_min: int,
+    haiku_scored: bool,
+    has_resume: bool,
+    global_min: int | None = None,
+    heuristic_min: int | None = None,
+) -> int:
+    """Lowest match_score (0-10) a job may carry and still be inserted.
+
+    The user's own min_match_score always applies. Haiku-scored jobs also face
+    the global floor (max of the two). Heuristic-only jobs face the heuristic
+    floor instead, and only when a resume exists: without one every heuristic
+    score is 0 by construction, so there is nothing to judge.
+    """
+    global_min = MIN_INSERT_SCORE if global_min is None else global_min
+    heuristic_min = MIN_INSERT_SCORE_HEURISTIC if heuristic_min is None else heuristic_min
+    user_min = max(0, int(user_min or 0))
+    if haiku_scored:
+        return max(user_min, global_min)
+    if has_resume:
+        return max(user_min, heuristic_min)
+    return user_min
+
+
+def resolve_score(haiku: dict | None, heuristic: int) -> tuple[int, str, list[str], list[str]]:
+    """Final 0-10 score plus Haiku's extras (reasoning, matched_skills, concerns).
+
+    Haiku scores 0-100; the UI expects 0-10 in match_score. Round to nearest so
+    a 78 lands at 8 (and stays above min_match_score filters users set against
+    the legacy 0-10 scale). Jobs Haiku did not score keep the heuristic number.
+    """
+    if haiku:
+        return round(haiku["score"] / 10), haiku["reasoning"], haiku["matched_skills"], haiku["concerns"]
+    return heuristic, "", [], []
 
 
 def get_supabase():
@@ -114,14 +199,26 @@ async def scrape(req: ScrapeRequest):
 
 
 async def _scrape_inner(req: ScrapeRequest):
-    logger.info(f"Scrape request: user={req.user_id}, titles={req.target_titles}, "
-                f"locations={req.target_locations}, sources={req.sources}, limit={req.daily_job_limit}")
+    # Counts only at INFO. The ingest runs in GitHub Actions and its log is
+    # public, so users' titles and locations (their search terms) stay out of
+    # it; LOG_LEVEL=DEBUG shows them locally.
+    user_tag = short_user(req.user_id)
+    logger.info(
+        f"Scrape request: user={user_tag}, titles={len(req.target_titles)}, "
+        f"expanded={len(req.expanded_titles or [])}, locations={len(req.target_locations)}, "
+        f"sources={len(req.sources)}, companies={len(req.companies)}, limit={req.daily_job_limit}, "
+        f"min_match_score={req.min_match_score}"
+    )
+    logger.debug(
+        f"Scrape request detail: titles={req.target_titles}, locations={req.target_locations}, "
+        f"sources={req.sources}"
+    )
 
     if not req.target_titles or not req.target_locations:
         return {"jobs_added": 0, "message": "No titles or locations configured"}
 
     if not req.resume_text:
-        logger.warning(f"User {req.user_id} has no resume — match scores will be 0")
+        logger.warning(f"User {user_tag} has no resume: match scores will be 0")
 
     # Union target_titles with upstream-expanded variants. Dedup is case-
     # insensitive but preserves the first-seen casing so logs stay readable.
@@ -199,20 +296,20 @@ async def _scrape_inner(req: ScrapeRequest):
         source_start = datetime.now()
 
         async def _invoke():
-            try:
-                return await scraper_fn(
-                    titles=effective_titles,
-                    locations=req.target_locations,
-                    limit=per_source_limit,
-                    companies=req.companies if src_lower in ATS_SOURCES else None,
-                )
-            except TypeError:
-                # Legacy scrapers without the companies kwarg
-                return await scraper_fn(
-                    titles=effective_titles,
-                    locations=req.target_locations,
-                    limit=per_source_limit,
-                )
+            kwargs: dict = {
+                "titles": effective_titles,
+                "locations": req.target_locations,
+                "limit": per_source_limit,
+            }
+            # Only ATS scrapers take the tracked-companies list. The old code
+            # passed companies=None to everyone and re-ran the scraper on
+            # TypeError, which also swallowed real TypeErrors inside a scraper.
+            if src_lower in ATS_SOURCES:
+                kwargs["companies"] = req.companies
+            if src_lower == "linkedin":
+                # Seeds the daily title x location rotation (linkedin.select_pairs).
+                kwargs["user_id"] = req.user_id
+            return await scraper_fn(**kwargs)
 
         try:
             # Gate browser-launching scrapers behind the shared semaphore so we
@@ -338,28 +435,25 @@ async def _scrape_inner(req: ScrapeRequest):
     # Insert into Supabase
     inserted = 0
     today = datetime.now().strftime("%Y-%m-%d")
+    has_resume = bool(req.resume_text)
 
     skipped_low_score = 0
+    # Of the skipped jobs, how many the user's own min_match_score would have
+    # let through, i.e. what the global floor alone removed.
+    skipped_global_floor = 0
     for job in unique_jobs:
         try:
             dedup_key = f"{normalize_company(job.company)}|{normalize_title(job.title)}|{job.source}"
             haiku = haiku_by_id.get(job.id)
-            if haiku:
-                # Haiku score is 0-100; UI expects 0-10 in match_score. Round to
-                # nearest so a 78 lands at 8 (and stays above min_match_score
-                # filters the user has set against the legacy 0-10 scale).
-                match_score = round(haiku["score"] / 10)
-                reasoning = haiku["reasoning"]
-                matched_skills = haiku["matched_skills"]
-                concerns = haiku["concerns"]
-            else:
-                match_score = heuristic_scores.get(job.id, 0)
-                reasoning = ""
-                matched_skills = []
-                concerns = []
+            match_score, reasoning, matched_skills, concerns = resolve_score(
+                haiku, heuristic_scores.get(job.id, 0)
+            )
 
-            if match_score < req.min_match_score:
+            floor = insert_floor(req.min_match_score, haiku is not None, has_resume)
+            if match_score < floor:
                 skipped_low_score += 1
+                if match_score >= req.min_match_score:
+                    skipped_global_floor += 1
                 continue
 
             priority = "High" if match_score >= 8 else "Medium" if match_score >= 5 else "Low"
@@ -391,8 +485,9 @@ async def _scrape_inner(req: ScrapeRequest):
             logger.error(f"Insert failed for {job.title} @ {job.company}: {e}")
 
     logger.info(
-        f"Done: {inserted}/{len(unique_jobs)} jobs inserted for user {req.user_id} "
-        f"(skipped {skipped_low_score} below min_match_score={req.min_match_score})"
+        f"Done: {inserted}/{len(unique_jobs)} jobs inserted for user {user_tag} "
+        f"(skipped {skipped_low_score} below floor: user min_match_score={req.min_match_score}, "
+        f"global MIN_INSERT_SCORE={MIN_INSERT_SCORE}; {skipped_global_floor} removed by the global floor alone)"
     )
 
     # Best-effort per-source stats write. Fire-and-forget semantics: a failure
@@ -409,6 +504,8 @@ async def _scrape_inner(req: ScrapeRequest):
         "jobs_after_dedup": len(unique_jobs),
         "jobs_added": inserted,
         "jobs_skipped_low_score": skipped_low_score,
+        "jobs_skipped_global_floor": skipped_global_floor,
+        "min_insert_score": MIN_INSERT_SCORE,
         "sources_used": req.sources,
     }
 
