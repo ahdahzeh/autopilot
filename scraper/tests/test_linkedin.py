@@ -159,6 +159,29 @@ def test_user_who_targets_india_keeps_india_but_still_drops_canada():
     assert not li.is_allowed_location("Calgary, Alberta, Canada", allowed)
 
 
+def test_user_who_targets_a_whole_region_keeps_every_non_us_country():
+    # "Europe" cannot be matched key for key (cards say "Berlin, Germany"), so
+    # targeting a region means the post-filter stands down entirely.
+    allowed = li.allowed_countries(["Europe", "Remote"])
+    assert "europe" in allowed and li.ANY_COUNTRY in allowed
+    assert li.is_allowed_location("Berlin, Germany", allowed)
+    assert li.is_allowed_location("Pune Division, Maharashtra, India", allowed)
+    assert li.is_allowed_location("Remote - EMEA", allowed)
+    # A country target still does not widen beyond that country.
+    assert li.ANY_COUNTRY not in li.allowed_countries(["Germany", "Remote"])
+
+
+def test_brief_error_drops_playwrights_call_log_and_the_url_in_it():
+    e = TimeoutError(
+        "Page.goto: Timeout 15000ms exceeded.\nCall log:\n"
+        '  - navigating to "https://www.linkedin.com/jobs/search/?keywords=SECRET+TITLE", waiting until "domcontentloaded"'
+    )
+    msg = li.brief_error(e)
+    assert msg == "TimeoutError: Page.goto: Timeout 15000ms exceeded."
+    assert "SECRET" not in msg
+    assert li.brief_error(ValueError()) == "ValueError"
+
+
 @pytest.mark.parametrize(
     "target, country",
     [
@@ -172,6 +195,35 @@ def test_user_who_targets_india_keeps_india_but_still_drops_canada():
 )
 def test_explicit_non_us_targets_are_recognised(target, country):
     assert li.allowed_countries([target]) == {country}
+
+
+# ---------------------------------------------------------------------------
+# Time budget
+# ---------------------------------------------------------------------------
+
+
+def test_soft_budget_leaves_the_margin_and_never_drops_below_30s():
+    assert li.soft_budget_seconds(180) == 180 - li.SOFT_BUDGET_MARGIN_SECONDS
+    assert li.soft_budget_seconds(90) == 90 - li.SOFT_BUDGET_MARGIN_SECONDS
+    assert li.soft_budget_seconds(10) == 30
+
+
+def test_margin_covers_one_worst_case_step_plus_pacing_and_teardown():
+    # A step is one goto, up to 7s of pacing sleeps and one bounded click; the
+    # loop then sleeps up to 3s and the browser needs a couple of seconds to
+    # close. Found in review: with 30s default click timeouts the real step
+    # was ~40s and a pass that started on time still lost everything at 180s.
+    step = (li.GOTO_TIMEOUT_MS + li.ACTION_TIMEOUT_MS) / 1000 + 7
+    assert li.ACTION_TIMEOUT_MS < 30000
+    assert li.SOFT_BUDGET_MARGIN_SECONDS >= step + 3 + 2
+
+
+def test_step_timeout_never_outlives_the_deadline():
+    now = 1000.0
+    assert li.step_timeout_ms(now + 100, now) == li.GOTO_TIMEOUT_MS
+    assert li.step_timeout_ms(now + 5, now) == 5000
+    assert li.step_timeout_ms(now - 5, now) == 1000
+    assert li.step_timeout_ms(now + 100, now, cap_ms=4000) == 4000
 
 
 # ---------------------------------------------------------------------------
@@ -300,3 +352,25 @@ def test_step_larger_than_window_is_clamped_to_the_window():
     a = li.select_pairs(TITLES_7, LOCS_3, 6, DAY0, USER, step=50)
     b = li.select_pairs(TITLES_7, LOCS_3, 6, DAY0, USER, step=6)
     assert a == b
+
+
+@pytest.mark.parametrize("n_titles, n_locs", [(2, 2), (3, 2), (2, 3), (4, 1), (1, 3)])
+@pytest.mark.parametrize("user_id", ["", USER])
+def test_small_matrix_under_the_cap_still_rotates_when_fewer_searches_run(n_titles, n_locs, user_id):
+    # Found in review: with 3-6 pairs (under MAX_SEARCHES) and a run that
+    # stops after 2 searches, the un-rotated matrix skipped pairs 3+ forever.
+    titles, locs = TITLES_7[:n_titles], LOCS_3[:n_locs]
+    n, step = n_titles * n_locs, 2
+    covered = set()
+    for d in range(math.ceil(n / step)):
+        pairs, _ = li.select_pairs(titles, locs, 6, DAY0 + timedelta(days=d), user_id, step=step)
+        assert len(pairs) == n and len(set(pairs)) == n  # the whole matrix is still the window
+        covered |= set(pairs[:step])
+    assert covered == full_matrix(titles, locs)
+
+
+def test_matrix_no_larger_than_a_days_searches_never_rotates():
+    titles, locs = TITLES_7[:1], LOCS_3[:2]
+    for d in range(5):
+        pairs, offset = li.select_pairs(titles, locs, 6, DAY0 + timedelta(days=d), USER, step=2)
+        assert offset == 0 and pairs == [(titles[0], l) for l in locs]

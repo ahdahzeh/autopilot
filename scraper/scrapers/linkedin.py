@@ -26,10 +26,37 @@ MAX_DETAIL_CARDS_PER_SEARCH = int(os.getenv("LINKEDIN_MAX_DETAILS", "3"))
 # nothing from it (asyncio.wait_for drops the coroutine's partial results), so
 # a pass that ran six searches and timed out on the seventh detail fetch
 # inserted zero jobs. We read the same env var and stop launching new work
-# this many seconds before the hard deadline; one detail fetch is bounded by
-# a 15s goto plus a 4s pause, so a 25s margin returns what we have in time.
+# SOFT_BUDGET_MARGIN_SECONDS before the hard deadline.
 LINKEDIN_TIMEOUT_SECONDS = int(os.getenv("LINKEDIN_TIMEOUT_SECONDS", "90"))
-SOFT_BUDGET_MARGIN_SECONDS = 25
+
+# Playwright actions (click and friends) wait up to 30s for their target to be
+# actionable. LinkedIn's guest pages lay a sign-in overlay over the "See more
+# jobs" and "Show more" buttons, so every click waited the full 30s (measured
+# 2026-10-20: 30.0s on the search page and 30.0s on each detail page), four
+# stalls per search with three details. That is how a pass that started on
+# time still hit the 180s hard timeout and lost everything. The description
+# text is complete without the click, so a short bound costs nothing.
+ACTION_TIMEOUT_MS = 2000
+GOTO_TIMEOUT_MS = 15000
+
+# One step (a search page or one detail page) is bounded by its goto, at most
+# 7s of pacing sleeps and one bounded click, so under 25s. The margin covers
+# the step already running when the soft deadline passes, the pacing sleep
+# after it and browser teardown. A navigation also never gets more time than
+# is left (step_timeout_ms), so a slow page cannot carry the pass over.
+SOFT_BUDGET_MARGIN_SECONDS = 35
+
+
+def soft_budget_seconds(hard_timeout: int, margin: int = SOFT_BUDGET_MARGIN_SECONDS) -> int:
+    """Seconds of new work the pass may start before returning what it has."""
+    return max(30, hard_timeout - margin)
+
+
+def step_timeout_ms(deadline: float, now: float | None = None, cap_ms: int = GOTO_TIMEOUT_MS) -> int:
+    """Navigation timeout clamped to the time left before `deadline` (floor 1s)."""
+    now = time.monotonic() if now is None else now
+    return max(1000, min(cap_ms, int((deadline - now) * 1000)))
+
 
 # LinkedIn's geo for the whole United States. The guest search honours geoId
 # over the free-text location (probed 2026-10-20: location=India plus this
@@ -297,14 +324,39 @@ def country_of(location: str) -> str | None:
     return None
 
 
+# Region keys a user may target ("Europe", "Remote - EMEA"). Cards carry a
+# country, never a region, so a targeted region cannot be matched key for key;
+# it says the user wants non-US results, so the post-filter stands down.
+REGION_KEYS = {"emea", "apac", "latam", "europe", "middle east"}
+ANY_COUNTRY = "*"
+
+
 def allowed_countries(user_locations: list[str]) -> set[str]:
-    """Non-US countries the user explicitly targets ("Pune" -> {"india"})."""
-    return {c for c in (country_of(loc) for loc in user_locations) if c}
+    """Non-US countries the user explicitly targets ("Pune" -> {"india"}).
+
+    Includes ANY_COUNTRY when a target is a whole region, since every country
+    in it is then explicitly wanted.
+    """
+    allowed = {c for c in (country_of(loc) for loc in user_locations) if c}
+    if allowed & REGION_KEYS:
+        allowed.add(ANY_COUNTRY)
+    return allowed
 
 
 def is_allowed_location(job_location: str, allowed: set[str]) -> bool:
     country = country_of(job_location)
-    return country is None or country in allowed
+    return country is None or ANY_COUNTRY in allowed or country in allowed
+
+
+def brief_error(e: BaseException) -> str:
+    """Exception type plus the first line of its message.
+
+    Playwright appends a call log to its errors ("navigating to <url>"), and a
+    search URL carries the user's titles and locations, so only the first line
+    may go to the public log at ERROR; the full text is for DEBUG.
+    """
+    lines = str(e).strip().splitlines()
+    return f"{type(e).__name__}: {lines[0]}" if lines else type(e).__name__
 
 
 # ---------------------------------------------------------------------------
@@ -348,17 +400,24 @@ def select_pairs(
     day's window is the next `max_searches` pairs of the matrix starting
     `step` pairs after yesterday's start (wrapping around), so the first
     `step` pairs of ceil(N / step) consecutive days cover the whole matrix.
-    `step` defaults to `max_searches`.
+    `step` defaults to the window size; `max_searches` <= 0 means no cap.
+
+    The matrix rotates whenever it has more pairs than a day's searches, not
+    only when it exceeds the cap: a 2 x 2 user whose run stops after 2
+    searches would otherwise have pairs 3 and 4 skipped every day, the same
+    starvation the cap caused for 7 x 3 users (4 of 17 prod users on
+    2026-10-20 had 3-6 pairs).
     """
     pairs = [(title, loc) for title in titles for loc in locations]
     n = len(pairs)
-    if max_searches <= 0 or n <= max_searches:
+    window = n if max_searches <= 0 else min(max_searches, n)
+    step = window if not step or step <= 0 else min(step, window)
+    if n <= step:
         return pairs, 0
-    step = max_searches if not step or step <= 0 else min(step, max_searches)
     phase = int(hashlib.sha256(user_id.encode()).hexdigest()[:8], 16) % n if user_id else 0
     start = ((day.toordinal() * step) + phase) % n
     rotated = pairs[start:] + pairs[:start]
-    return rotated[:max_searches], start
+    return rotated[:window], start
 
 
 def parse_years(text: str) -> int | None:
@@ -436,11 +495,12 @@ async def extract_cards(page) -> list[dict]:
     return jobs
 
 
-async def get_detail(page, url: str) -> dict:
+async def get_detail(page, url: str, deadline: float | None = None) -> dict:
     if not url:
         return {"description": "", "salary_range": ""}
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        timeout = step_timeout_ms(deadline) if deadline is not None else GOTO_TIMEOUT_MS
+        await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
         await asyncio.sleep(random.uniform(2, 4))
 
         show_more = await page.query_selector("button.show-more-less-html__button")
@@ -460,7 +520,8 @@ async def get_detail(page, url: str) -> dict:
 
         return {"description": "", "salary_range": ""}
     except Exception as e:
-        logger.warning(f"Detail failed for {url}: {e}")
+        logger.warning(f"Detail failed for {url}: {brief_error(e)}")
+        logger.debug(f"Detail error for {url}: {e}")
         return {"description": "", "salary_range": ""}
 
 
@@ -477,7 +538,7 @@ async def scrape(
     pairs, offset = select_pairs(titles, search_locs, MAX_SEARCHES, today or date.today(), user_id, step=step)
     total_pairs = len(titles) * len(search_locs)
 
-    budget = max(30, LINKEDIN_TIMEOUT_SECONDS - SOFT_BUDGET_MARGIN_SECONDS)
+    budget = soft_budget_seconds(LINKEDIN_TIMEOUT_SECONDS)
     started = time.monotonic()
     deadline = started + budget
 
@@ -502,6 +563,8 @@ async def scrape(
         user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     )
     page = await context.new_page()
+    # Bounds the clicks in scroll_and_load and get_detail (see ACTION_TIMEOUT_MS).
+    page.set_default_timeout(ACTION_TIMEOUT_MS)
 
     try:
         for i, (title, location) in enumerate(pairs, 1):
@@ -516,7 +579,7 @@ async def scrape(
             url = build_url(title, location)
             logger.debug(f"  search {i}: '{title}' in {location.label} (geoId={location.geo_id}, remote={location.remote})")
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=step_timeout_ms(deadline))
                 await asyncio.sleep(random.uniform(1.5, 3))
                 await scroll_and_load(page)
                 searches_run += 1
@@ -541,7 +604,7 @@ async def scrape(
                     if len(all_jobs) >= limit or time.monotonic() > deadline:
                         break
                     await asyncio.sleep(random.uniform(1.5, 3))
-                    detail = await get_detail(page, card["url"])
+                    detail = await get_detail(page, card["url"], deadline)
                     yoe = parse_years(detail["description"]) if detail["description"] else None
 
                     # The guest endpoint ignores the remote facet, so a remote
@@ -566,7 +629,10 @@ async def scrape(
                     all_jobs.append(job)
 
             except Exception as e:
-                logger.error(f"    search {i} failed: {e}")
+                # A goto timeout's message carries the search URL, and so the
+                # user's search terms (probed 2026-10-20); first line only here.
+                logger.error(f"    search {i} failed: {brief_error(e)}")
+                logger.debug(f"    search {i} error detail: {e}")
 
             await asyncio.sleep(random.uniform(1.5, 3))
     finally:
