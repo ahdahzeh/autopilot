@@ -54,6 +54,14 @@ type CampaignSummary = {
   errors: string[];
 };
 
+// Every skip says why, so a run where everyone is skipped can be read from the
+// log alone. (The digest skipped every user from 2026-10-16 to 2026-11-04 and
+// the only clue was "only 0 eligible matches".)
+function skip(summary: CampaignSummary, campaign: string, id: string, reason: string): void {
+  console.log(`[${campaign}] skip ${userTag(id)}: ${reason}`);
+  summary.skipped += 1;
+}
+
 // ─── Onboarding reminders ───────────────────────────────────────────────────
 
 const ONBOARDING_CADENCE_DAYS = [1, 3, 7]; // day N after signup per attempt
@@ -81,26 +89,29 @@ export async function processOnboardingReminders(): Promise<CampaignSummary> {
   for (const p of profiles) {
     summary.eligible += 1;
 
-    if (p.emails_opted_out) { summary.skipped += 1; continue; }
+    if (p.emails_opted_out) { skip(summary, "onboarding", p.id, "opted out"); continue; }
 
     const count = p.onboarding_reminder_count ?? 0;
-    if (count >= ONBOARDING_CADENCE_DAYS.length) { summary.skipped += 1; continue; }
+    if (count >= ONBOARDING_CADENCE_DAYS.length) { skip(summary, "onboarding", p.id, `all ${count} reminders sent`); continue; }
 
     // Has enough time passed since signup (for the first reminder) or since
     // the last reminder?
     const daysSinceSignup = (now - new Date(p.created_at).getTime()) / 86400000;
     const expectedDay = ONBOARDING_CADENCE_DAYS[count]; // the day the NEXT attempt should go out (measured from signup)
-    if (daysSinceSignup < expectedDay) { summary.skipped += 1; continue; }
+    if (daysSinceSignup < expectedDay) {
+      skip(summary, "onboarding", p.id, `reminder ${count + 1} is due on day ${expectedDay}, signed up ${daysSinceSignup.toFixed(1)} days ago`);
+      continue;
+    }
 
     // Extra guard: don't send two reminders within 24h of each other.
     if (p.onboarding_reminder_last_at) {
       const hoursSinceLast = (now - new Date(p.onboarding_reminder_last_at).getTime()) / 3600000;
-      if (hoursSinceLast < 24) { summary.skipped += 1; continue; }
+      if (hoursSinceLast < 24) { skip(summary, "onboarding", p.id, `last reminder ${hoursSinceLast.toFixed(1)}h ago`); continue; }
     }
 
     const email = emailById[p.id];
-    if (!email) { summary.skipped += 1; continue; }
-    if (!p.unsubscribe_token) { summary.skipped += 1; continue; }
+    if (!email) { skip(summary, "onboarding", p.id, "no email address on the auth user"); continue; }
+    if (!p.unsubscribe_token) { skip(summary, "onboarding", p.id, "no unsubscribe token"); continue; }
 
     const payload = renderOnboardingReminder({
       to: email,
@@ -171,24 +182,34 @@ export async function processDailyDigest(): Promise<CampaignSummary> {
     // Throttle: under DIGEST_MIN_HOURS_BETWEEN_SENDS since the last digest means skip.
     if (p.digest_email_last_at) {
       const hoursSince = (now - new Date(p.digest_email_last_at).getTime()) / 3600_000;
-      if (hoursSince < DIGEST_MIN_HOURS_BETWEEN_SENDS) { summary.skipped += 1; continue; }
+      if (hoursSince < DIGEST_MIN_HOURS_BETWEEN_SENDS) {
+        skip(summary, "daily-digest", p.id, `last digest ${hoursSince.toFixed(1)}h ago`);
+        continue;
+      }
     }
 
     const email = emailById[p.id];
-    if (!email) { summary.skipped += 1; continue; }
-    if (!p.unsubscribe_token) { summary.skipped += 1; continue; }
+    if (!email) { skip(summary, "daily-digest", p.id, "no email address on the auth user"); continue; }
+    if (!p.unsubscribe_token) { skip(summary, "daily-digest", p.id, "no unsubscribe token"); continue; }
 
     // Top 5 Haiku-scored jobs from the last 24h with a real apply link.
     // score_reasoning must be non-null — we don't send "see these jobs"
     // emails if we can't show why they fit.
-    const { data: jobs } = await svc
+    // The job title column is `role`; asking for `title` made every one of
+    // these queries fail, and with the error ignored every user had 0 matches.
+    const { data: jobs, error: jobsError } = await svc
       .from("jobs")
-      .select("id, title, company, match_score, score_reasoning, apply_link")
+      .select("id, title:role, company, match_score, score_reasoning, apply_link")
       .eq("user_id", p.id)
       .gte("created_at", since)
       .not("score_reasoning", "is", null)
       .order("match_score", { ascending: false, nullsFirst: false })
       .limit(10); // fetch extra so filtering empty apply_link still yields 5
+
+    if (jobsError) {
+      summary.errors.push(`${userTag(p.id)}: load jobs: ${jobsError.message}`);
+      continue;
+    }
 
     const eligibleJobs: DailyDigestJob[] = (jobs ?? [])
       .filter((j) => typeof j.apply_link === "string" && j.apply_link.trim() !== "")
@@ -203,8 +224,16 @@ export async function processDailyDigest(): Promise<CampaignSummary> {
       }));
 
     if (eligibleJobs.length < DIGEST_MIN_MATCHES) {
-      console.log(`[daily-digest] skip ${userTag(p.id)}: only ${eligibleJobs.length} eligible match${eligibleJobs.length === 1 ? "" : "es"}`);
-      summary.skipped += 1;
+      // Say how many recent jobs there were, so "no jobs" and "jobs nobody
+      // scored" (a user with no resume gets match_score 0 and an empty
+      // score_reasoning on every job) read differently.
+      const fetched = jobs?.length ?? 0;
+      skip(
+        summary,
+        "daily-digest",
+        p.id,
+        `only ${eligibleJobs.length} eligible match${eligibleJobs.length === 1 ? "" : "es"} (${fetched} job${fetched === 1 ? "" : "s"} from the last ${DIGEST_WINDOW_HOURS}h, ${fetched - eligibleJobs.length} without score reasoning or an apply link)`,
+      );
       continue;
     }
 
@@ -265,36 +294,51 @@ export async function processEngagementEmails(): Promise<CampaignSummary> {
 
   for (const p of profiles) {
     summary.eligible += 1;
-    if (p.emails_opted_out) { summary.skipped += 1; continue; }
+    if (p.emails_opted_out) { skip(summary, "engagement", p.id, "opted out"); continue; }
 
     // Cadence gate. First-timers (no prior send) go immediately.
     if (p.engagement_email_last_at) {
       const daysSince = (now - new Date(p.engagement_email_last_at).getTime()) / 86400000;
-      if (daysSince < ENGAGEMENT_MIN_GAP_DAYS) { summary.skipped += 1; continue; }
+      if (daysSince < ENGAGEMENT_MIN_GAP_DAYS) {
+        skip(summary, "engagement", p.id, `last nudge ${daysSince.toFixed(1)} days ago`);
+        continue;
+      }
       if (daysSince < ENGAGEMENT_GUARANTEED_AFTER_DAYS) {
-        if (Math.random() > ENGAGEMENT_PROBABILITY_IN_WINDOW) { summary.skipped += 1; continue; }
+        if (Math.random() > ENGAGEMENT_PROBABILITY_IN_WINDOW) {
+          skip(summary, "engagement", p.id, `not drawn today (last nudge ${daysSince.toFixed(1)} days ago)`);
+          continue;
+        }
       }
     }
 
     const email = emailById[p.id];
-    if (!email) { summary.skipped += 1; continue; }
-    if (!p.unsubscribe_token) { summary.skipped += 1; continue; }
+    if (!email) { skip(summary, "engagement", p.id, "no email address on the auth user"); continue; }
+    if (!p.unsubscribe_token) { skip(summary, "engagement", p.id, "no unsubscribe token"); continue; }
 
     // Pull last 7 days of the user's jobs, ranked by match_score desc.
     const since = new Date(now - 7 * 86400000).toISOString();
-    const { data: jobs } = await svc
+    // Same columns as the digest: the title is `role` and the link is
+    // `apply_link`. Asking for title and url failed, and every nudge went out
+    // with an empty job list ("the scrapers were quiet this week").
+    const { data: jobs, error: jobsError } = await svc
       .from("jobs")
-      .select("id, title, company, match_score, url")
+      .select("id, title:role, company, match_score, apply_link")
       .eq("user_id", p.id)
       .gte("created_at", since)
       .order("match_score", { ascending: false, nullsFirst: false })
       .limit(5);
 
+    if (jobsError) {
+      summary.errors.push(`${userTag(p.id)}: load jobs: ${jobsError.message}`);
+      continue;
+    }
+
     const digestJobs: DigestJob[] = (jobs ?? []).map((j) => ({
       title: j.title ?? "Untitled",
       company: j.company ?? "—",
       match_score: j.match_score ?? null,
-      url: j.url ?? `${process.env.NEXT_PUBLIC_APP_URL || "https://autopilot.ahdahzeh.com"}/`,
+      // apply_link defaults to '' (not null), so || and not ??.
+      url: j.apply_link || `${process.env.NEXT_PUBLIC_APP_URL || "https://autopilot.ahdahzeh.com"}/`,
     }));
 
     // 60% digest, 40% spotlight. Spotlight requires at least one job with a

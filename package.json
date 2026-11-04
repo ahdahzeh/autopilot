@@ -9,7 +9,8 @@
     "lint": "eslint",
     "eval:models": "tsx scripts/model-eval/run.ts",
     "cost:tailor": "tsx scripts/tailor-cost/run.ts",
-    "test:billing": "tsx scripts/billing/webhook-test.ts"
+    "test:billing": "tsx scripts/billing/webhook-test.ts",
+    "test:emails": "tsx scripts/emails/campaigns-test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.67",
