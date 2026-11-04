@@ -47,3 +47,4 @@ __pycache__/
 
 # supabase cli scratch
 supabase/.temp/
+.claude/worktrees/
