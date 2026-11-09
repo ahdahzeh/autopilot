@@ -14,7 +14,7 @@ Autopilot is a job-search product at autopilot.ahdahzeh.com: users onboard (ofte
 
 **Users and money:** multi-use invite codes redeemed server side (020, admins mint them); tailoring capped at 20/day with token usage logged, extra tailors sold through Stripe (021); users can mark "I got a job" to pause their search (022). Migrations are numbered; check `supabase/migrations/` before naming one.
 
-**Known issue (2026-11-04):** the daily digest had never sent: its jobs query asked for `jobs.title` (the column is `role`) and dropped the error. Fix is PR #2, branch `fix/digest-jobs-columns`, not merged yet.
+**Known issue (2026-11-04):** the daily digest had never sent: its jobs query asked for `jobs.title` (the column is `role`) and dropped the error. Fixed by PR #2 (merged 2026-11-09); the first run after that is the first digest ever sent.
 
 **Monitoring:** the local `autopilot-ingest-watch` scheduled task checks every run and new-job counts daily at 15:00 and writes `~/Documents/ops-reports/autopilot-ingest/YYYY-MM-DD.md`.
 
