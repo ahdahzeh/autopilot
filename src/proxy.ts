@@ -1,6 +1,9 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+// Public along with anything under them. Matched as whole path segments (the
+// path itself or the path and a slash), so a route like /api/cron-admin or
+// /signup-admin is not public just because it shares a prefix.
 const publicPaths = ["/login", "/signup", "/api/cron", "/api/subscribe"];
 
 // Routes that receive no session cookie: Stripe's webhook and the unsubscribe
@@ -21,7 +24,7 @@ export async function proxy(request: NextRequest) {
   }
 
   // Allow public paths
-  if (publicPaths.some((p) => pathname.startsWith(p))) {
+  if (publicPaths.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return NextResponse.next();
   }
   if (exactPublicPaths.has(pathname.replace(/\/$/, ""))) {
