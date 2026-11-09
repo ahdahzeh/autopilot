@@ -133,7 +133,11 @@ async function main(): Promise<void> {
       const started = Date.now();
       const result = await scrapeForUser(id);
       results.push(result);
-      const label = result.error ? `error: ${result.error}` : result.skipped ? `skipped: ${result.reason}` : "ok";
+      // The scraper sets error when every insert it tried failed, and reports
+      // failed inserts as jobs_failed, so a run whose writes fail cannot read as ok.
+      const failed = Number(result.jobs_failed ?? 0) || 0;
+      const status = result.error ? `error: ${result.error}` : result.skipped ? `skipped: ${result.reason}` : "ok";
+      const label = failed > 0 && !result.error ? `${status} (${failed} inserts failed)` : status;
       console.log(`  ${shortHash(id)} ${((Date.now() - started) / 1000).toFixed(1)}s ${redactIds(label)}`);
     }
   });
@@ -143,8 +147,9 @@ async function main(): Promise<void> {
   const skipped = results.filter((r) => r.skipped).length;
   // The scraper reports what it wrote as jobs_added.
   const inserted = results.reduce((total, r) => total + (Number(r.jobs_added ?? 0) || 0), 0);
+  const failedInserts = results.reduce((total, r) => total + (Number(r.jobs_failed ?? 0) || 0), 0);
   console.log(
-    `ingest done: shard ${shard.index} of ${shard.total}: ${results.length} users, ${inserted} jobs inserted, ${skipped} skipped, ${errored} errored`,
+    `ingest done: shard ${shard.index} of ${shard.total}: ${results.length} users, ${inserted} jobs inserted, ${failedInserts} inserts failed, ${skipped} skipped, ${errored} errored`,
   );
 
   // Failing only when every user errored let 16 of 17 erroring go green. Most

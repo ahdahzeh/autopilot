@@ -193,6 +193,41 @@ def haiku_columns_available(supabase) -> bool:
     return _haiku_columns_available
 
 
+# PostgREST returns at most 1,000 rows per select (the project's max-rows), so
+# reading a user's existing jobs in one call missed everything past the first
+# 1,000 and those jobs were inserted again. Page until a page comes back empty,
+# stepping by what each page returned in case max-rows is ever set lower.
+EXISTING_JOBS_PAGE = 1000
+
+
+def existing_job_rows(supabase, user_id: str) -> list[dict]:
+    rows: list[dict] = []
+    while True:
+        page = (
+            supabase.table("jobs")
+            .select("company, role")
+            .eq("user_id", user_id)
+            .order("id")
+            .range(len(rows), len(rows) + EXISTING_JOBS_PAGE - 1)
+            .execute()
+        ).data or []
+        if not page:
+            return rows
+        rows.extend(page)
+
+
+def insert_failure_error(inserted: int, failed: int) -> str | None:
+    """An error for the response when every insert that was tried failed.
+
+    Without it a run whose writes all failed answered like a quiet day
+    (jobs_added 0, no error), so the ingest job counted the user as ok and
+    could go green with no rows written.
+    """
+    if inserted == 0 and failed > 0:
+        return f"all {failed} job inserts failed"
+    return None
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
@@ -284,8 +319,7 @@ async def _scrape_inner(req: ScrapeRequest):
     # Get existing jobs for this user to deduplicate against
     existing_keys = set()
     try:
-        result = supabase.table("jobs").select("company, role").eq("user_id", req.user_id).execute()
-        for row in result.data or []:
+        for row in existing_job_rows(supabase, req.user_id):
             key = f"{normalize_company(row.get('company', ''))}|{normalize_title(row.get('role', ''))}"
             existing_keys.add(key)
         logger.info(f"User has {len(existing_keys)} existing jobs")
@@ -467,6 +501,7 @@ async def _scrape_inner(req: ScrapeRequest):
 
     # Insert into Supabase
     inserted = 0
+    insert_failed = 0
     today = datetime.now().strftime("%Y-%m-%d")
     has_resume = bool(req.resume_text)
 
@@ -515,10 +550,11 @@ async def _scrape_inner(req: ScrapeRequest):
             if s is not None:
                 s["jobs_inserted"] += 1
         except Exception as e:
+            insert_failed += 1
             logger.error(f"Insert failed for {job.title} @ {job.company}: {e}")
 
     logger.info(
-        f"Done: {inserted}/{len(unique_jobs)} jobs inserted for user {user_tag} "
+        f"Done: {inserted}/{len(unique_jobs)} jobs inserted for user {user_tag}, {insert_failed} failed "
         f"(skipped {skipped_low_score} below floor: user min_match_score={req.min_match_score}, "
         f"global MIN_INSERT_SCORE={MIN_INSERT_SCORE}; {skipped_global_floor} removed by the global floor alone)"
     )
@@ -532,15 +568,20 @@ async def _scrape_inner(req: ScrapeRequest):
     except Exception as e:
         logger.warning(f"source_stats outer write failed: {e}")
 
-    return {
+    response = {
         "jobs_scraped": len(all_jobs),
         "jobs_after_dedup": len(unique_jobs),
         "jobs_added": inserted,
+        "jobs_failed": insert_failed,
         "jobs_skipped_low_score": skipped_low_score,
         "jobs_skipped_global_floor": skipped_global_floor,
         "min_insert_score": MIN_INSERT_SCORE,
         "sources_used": req.sources,
     }
+    error = insert_failure_error(inserted, insert_failed)
+    if error:
+        response["error"] = error
+    return response
 
 
 def _below_salary_floor(job, floor: int) -> bool:
