@@ -1,5 +1,7 @@
+import { randomBytes } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { GMAIL_NONCE_COOKIE } from "@/lib/gmail-oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +23,12 @@ export async function GET(request: NextRequest) {
   }
 
   const origin = new URL(request.url).searchParams.get("origin") || "settings";
-  const state = JSON.stringify({ userId: user.id, origin });
+  // The callback takes the user from the session, never from state. The nonce
+  // ties the code Google sends back to the browser that started here, so a
+  // link built with someone else's code can't attach their mailbox to this
+  // account.
+  const nonce = randomBytes(24).toString("base64url");
+  const state = JSON.stringify({ nonce, origin });
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -33,7 +40,16 @@ export async function GET(request: NextRequest) {
     state,
   });
 
-  return Response.redirect(
+  const res = NextResponse.redirect(
     `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`
   );
+  res.cookies.set(GMAIL_NONCE_COOKIE, nonce, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    // Lax: Google sends the browser back with a top-level GET.
+    sameSite: "lax",
+    path: "/api/gmail",
+    maxAge: 600,
+  });
+  return res;
 }

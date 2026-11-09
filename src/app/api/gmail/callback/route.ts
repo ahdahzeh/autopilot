@@ -1,5 +1,6 @@
-import { createServiceClient } from "@/lib/supabase/server";
-import { NextRequest } from "next/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { NextRequest, NextResponse } from "next/server";
+import { GMAIL_NONCE_COOKIE } from "@/lib/gmail-oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -8,20 +9,33 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get("code");
   const stateRaw = searchParams.get("state") || "{}";
   const error = searchParams.get("error");
-  let userId = "";
+  let nonce = "";
   let origin = "settings";
   try {
     const state = JSON.parse(stateRaw);
-    userId = state.userId || stateRaw; // backwards compat
+    nonce = typeof state.nonce === "string" ? state.nonce : "";
     origin = state.origin || "settings";
   } catch {
-    userId = stateRaw;
+    // Not a state this app sent.
   }
 
-  if (error || !code || !userId) {
-    return Response.redirect(
-      new URL("/settings?gmail=error", request.url)
-    );
+  const failed = () => {
+    const res = NextResponse.redirect(new URL("/settings?gmail=error", request.url));
+    res.cookies.delete({ name: GMAIL_NONCE_COOKIE, path: "/api/gmail" });
+    return res;
+  };
+
+  // The account is the signed-in one, never an id read from the URL: state
+  // used to carry userId, unsigned, so a crafted link could store one
+  // person's mailbox tokens on another person's account.
+  const session = await createClient();
+  const { data: { user } } = await session.auth.getUser();
+  if (!user) return Response.redirect(new URL("/login", request.url));
+  const userId = user.id;
+
+  const expected = request.cookies.get(GMAIL_NONCE_COOKIE)?.value;
+  if (error || !code || !nonce || !expected || nonce !== expected) {
+    return failed();
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID!;
@@ -43,7 +57,7 @@ export async function GET(request: NextRequest) {
 
   if (!tokenRes.ok) {
     console.error("Token exchange failed:", await tokenRes.text());
-    return Response.redirect(new URL("/settings?gmail=error", request.url));
+    return failed();
   }
 
   const tokens = await tokenRes.json();
@@ -52,13 +66,18 @@ export async function GET(request: NextRequest) {
   const supabase = createServiceClient();
 
   // Upsert tokens
-  await supabase.from("gmail_tokens").upsert({
+  const { error: tokenErr } = await supabase.from("gmail_tokens").upsert({
     user_id: userId,
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
     token_expiry: expiry,
     updated_at: new Date().toISOString(),
   }, { onConflict: "user_id" });
+  if (tokenErr) {
+    // Don't say "connected" when nothing was stored.
+    console.error("[gmail/callback] gmail_tokens upsert failed:", tokenErr.message);
+    return failed();
+  }
 
   // Mark gmail_connected on profile
   const { data: profile } = await supabase
@@ -78,5 +97,7 @@ export async function GET(request: NextRequest) {
     ? "/onboarding?gmail=connected"
     : "/settings?gmail=connected";
 
-  return Response.redirect(new URL(redirectPath, request.url));
+  const res = NextResponse.redirect(new URL(redirectPath, request.url));
+  res.cookies.delete({ name: GMAIL_NONCE_COOKIE, path: "/api/gmail" });
+  return res;
 }

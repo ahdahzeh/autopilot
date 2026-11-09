@@ -64,6 +64,12 @@ export async function POST(req: Request) {
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = (await req.json()) as Body;
+  // Role and company go into every block prompt uncut (the description is cut
+  // to 6000 there), and each block is up to three model calls, so a pasted
+  // page in either field was billed on every one of them.
+  body.role = String(body.role ?? "").slice(0, 200);
+  body.company = String(body.company ?? "").slice(0, 200);
+  body.jobDescription = typeof body.jobDescription === "string" ? body.jobDescription.slice(0, 20_000) : "";
   if (!body.jobDescription || body.jobDescription.trim().length < 50) {
     return Response.json({ error: "Job description is too short." }, { status: 400 });
   }
