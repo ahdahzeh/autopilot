@@ -100,9 +100,27 @@ function ActionCard({
   onDismiss: (jobId: string, reason: DismissReason) => void;
 }) {
   const [draftState, setDraftState] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [draftUrl, setDraftUrl] = useState("");
+  const [draft, setDraft] = useState<{ subject: string; body: string } | null>(null);
+  const [copied, setCopied] = useState(false);
   const [draftError, setDraftError] = useState("");
   const [showDetail, setShowDetail] = useState(false);
+
+  // The draft has no recipient: the person adds the recruiter's address in
+  // their mail app.
+  const mailtoHref = draft
+    ? `mailto:?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`
+    : "";
+
+  async function copyDraft() {
+    if (!draft) return;
+    try {
+      await navigator.clipboard.writeText(`Subject: ${draft.subject}\n\n${draft.body}`);
+      setCopied(true);
+      setDraftError("");
+    } catch {
+      setDraftError("Could not copy. Use Open in mail instead.");
+    }
+  }
 
   async function createDraft() {
     setDraftState("loading");
@@ -119,10 +137,10 @@ function ActionCard({
       });
       const data = await res.json();
       if (!res.ok) {
-        setDraftError(data.error || "Failed to create draft");
+        setDraftError(data.error || "Could not write the follow-up");
         setDraftState("error");
       } else {
-        setDraftUrl(data.draftUrl);
+        setDraft({ subject: data.subject, body: data.body });
         setDraftState("done");
       }
     } catch {
@@ -181,21 +199,27 @@ function ActionCard({
           )}
           {item.actionType === "follow_up" && (
             draftState === "done" ? (
-              <a
-                href={draftUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-green-50 text-green-700 px-2.5 py-0.5 rounded text-[10px] font-semibold hover:brightness-95 transition"
-              >
-                Open Draft ↗
-              </a>
+              <>
+                <a
+                  href={mailtoHref}
+                  className="bg-green-50 text-green-700 px-2.5 py-0.5 rounded text-[10px] font-semibold hover:brightness-95 transition"
+                >
+                  Open in mail
+                </a>
+                <button
+                  onClick={copyDraft}
+                  className="bg-neutral-100 text-foreground px-2.5 py-0.5 rounded text-[10px] font-semibold hover:bg-neutral-200 transition"
+                >
+                  {copied ? "Copied" : "Copy"}
+                </button>
+              </>
             ) : (
               <button
                 onClick={createDraft}
                 disabled={draftState === "loading"}
                 className="bg-blue-50 text-blue-600 px-2.5 py-0.5 rounded text-[10px] font-semibold hover:bg-blue-100 transition disabled:opacity-50"
               >
-                {draftState === "loading" ? "Creating..." : draftState === "error" ? "Retry" : "Follow Up"}
+                {draftState === "loading" ? "Writing..." : draftState === "error" ? "Retry" : "Write follow-up"}
               </button>
             )
           )}
