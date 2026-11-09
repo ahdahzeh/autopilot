@@ -39,8 +39,11 @@ export async function POST(req: Request) {
   );
 
   if (!res.ok) {
+    // Resend's error body stays in the server log: this route is public, and
+    // the body describes our Resend account, not anything the caller can fix.
     const body = await res.text().catch(() => "");
-    return NextResponse.json({ error: "resend rejected", detail: body }, { status: res.status });
+    console.error(`[subscribe] resend returned ${res.status}: ${body.slice(0, 500)}`);
+    return NextResponse.json({ error: "could not subscribe" }, { status: 502 });
   }
   return NextResponse.json({ ok: true });
 }
