@@ -226,7 +226,7 @@ export async function processDailyDigest(): Promise<CampaignSummary> {
       .map((j) => ({
         id: j.id,
         title: j.title ?? "Untitled",
-        company: j.company ?? "—",
+        company: j.company ?? "Company not listed",
         match_score: j.match_score ?? null,
         score_reasoning: j.score_reasoning as string,
       }));
@@ -344,7 +344,7 @@ export async function processEngagementEmails(): Promise<CampaignSummary> {
 
     const digestJobs: DigestJob[] = (jobs ?? []).map((j) => ({
       title: j.title ?? "Untitled",
-      company: j.company ?? "—",
+      company: j.company ?? "Company not listed",
       match_score: j.match_score ?? null,
       // apply_link defaults to '' (not null), so || and not ??.
       url: j.apply_link || `${process.env.NEXT_PUBLIC_APP_URL || "https://autopilot.ahdahzeh.com"}/`,

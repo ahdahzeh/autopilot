@@ -123,7 +123,7 @@ const ONBOARDING_COPY: Record<1 | 2 | 3, { subject: (n: string) => string; previ
     subject: (n) => `Your Autopilot is almost ready${n ? `, ${n}` : ""}`,
     preview: "Finishing setup takes about 90 seconds.",
     greet: "Hey {NAME} 👋",
-    body: `Thanks for signing up for Autopilot — we're excited to help you land your next role.<br/><br/>
+    body: `Thanks for signing up for Autopilot. We're excited to help you land your next role.<br/><br/>
       You got partway through setup, and we saved your progress. Finishing takes about 90 seconds and then Autopilot starts surfacing fresh jobs for you every morning.`,
     cta: "Finish setup",
   },
@@ -131,16 +131,16 @@ const ONBOARDING_COPY: Record<1 | 2 | 3, { subject: (n: string) => string; previ
     subject: () => `Still here when you're ready`,
     preview: "Your partial setup is waiting.",
     greet: "Hey {NAME},",
-    body: `Just checking in — your Autopilot is still saved and ready whenever you have 90 seconds to finish.<br/><br/>
+    body: `Just checking in. Your Autopilot is still saved and ready whenever you have 90 seconds to finish.<br/><br/>
       Once it's set up, we scrape 8 job boards every morning at 9 AM ET and surface the best matches for you. No searching, no tabs, no endless scrolling.`,
     cta: "Finish setup",
   },
   3: {
-    subject: () => `One last nudge — then we'll leave you alone`,
+    subject: () => `One last nudge, then we'll leave you alone`,
     preview: "Final reminder to finish setting up Autopilot.",
     greet: "Hey {NAME},",
-    body: `This is the last email we'll send about finishing setup. No hard feelings either way — we know timing matters.<br/><br/>
-      If now's not the right time, all good. Your data is safe if you come back later. If you want, reply and tell us what got in the way — it genuinely helps us make Autopilot better.`,
+    body: `This is the last email we'll send about finishing setup. No hard feelings either way. We know timing matters.<br/><br/>
+      If now's not the right time, all good. Your data is safe if you come back later. If you want, reply and tell us what got in the way. It genuinely helps us make Autopilot better.`,
     cta: "Pick up where I left off",
   },
 };
@@ -159,11 +159,11 @@ export function renderOnboardingReminder(input: OnboardingReminderInput): EmailP
       <p style="font-size:18px;font-weight:600;margin:0 0 12px;">${greetLine}</p>
       <p style="font-size:15px;line-height:1.6;margin:0 0 12px;color:#333;">${copy.body}</p>
       ${button(copy.cta, cta)}
-      <p style="font-size:13px;color:#888;margin:24px 0 0;">— Adaze</p>
+      <p style="font-size:13px;color:#888;margin:24px 0 0;">Adaze</p>
     `,
   });
 
-  const text = `${greetLine}\n\n${copy.body.replace(/<br\s*\/?>/g, "\n").replace(/<[^>]+>/g, "")}\n\n${copy.cta}: ${cta}\n\n— Adaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
+  const text = `${greetLine}\n\n${copy.body.replace(/<br\s*\/?>/g, "\n").replace(/<[^>]+>/g, "")}\n\n${copy.cta}: ${cta}\n\nAdaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
 
   return { to: input.to, subject, html, text, unsubscribeUrl: unsubscribeUrl(input.unsubscribeToken) };
 }
@@ -213,10 +213,10 @@ export function renderDigest(input: DigestInput): EmailPayload {
         ? `<p style="font-size:15px;line-height:1.6;margin:0 0 16px;color:#333;">Here are the top matches from your queue ${input.periodLabel}. Pick one and we'll tailor your resume for it in seconds.</p>
            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${jobsHtml}</table>
            ${button("Open dashboard", appUrl("/"))}`
-        : `<p style="font-size:15px;line-height:1.6;margin:0 0 12px;color:#333;">The scrapers have been a little quiet ${input.periodLabel}. Worth popping into Settings and widening your locations or titles — the pool opens up fast with a couple tweaks.</p>
+        : `<p style="font-size:15px;line-height:1.6;margin:0 0 12px;color:#333;">The scrapers have been a little quiet ${input.periodLabel}. Worth popping into Settings and widening your locations or titles. The pool opens up fast with a couple tweaks.</p>
            ${button("Open Settings", appUrl("/settings"))}`
       }
-      <p style="font-size:13px;color:#888;margin:24px 0 0;">— Adaze</p>
+      <p style="font-size:13px;color:#888;margin:24px 0 0;">Adaze</p>
     `,
   });
 
@@ -224,7 +224,7 @@ export function renderDigest(input: DigestInput): EmailPayload {
   const text = `Hey ${name},\n\n${count > 0
     ? `Here are your top matches ${input.periodLabel}:\n\n${jobsText}\n\nDashboard: ${appUrl("/")}`
     : `The scrapers were quiet ${input.periodLabel}. Worth widening your titles or locations in Settings: ${appUrl("/settings")}`
-  }\n\n— Adaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
+  }\n\nAdaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
 
   return { to: input.to, subject, html, text, unsubscribeUrl: unsubscribeUrl(input.unsubscribeToken) };
 }
@@ -281,7 +281,7 @@ export function renderDailyDigest(input: DailyDigestInput): EmailPayload {
       <p style="font-size:15px;line-height:1.6;margin:0 0 16px;color:#333;">Your top matches from the last 24 hours, ranked by fit.</p>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${jobsHtml}</table>
       ${button("Open dashboard", appUrl("/"))}
-      <p style="font-size:13px;color:#888;margin:24px 0 0;">— Adaze</p>
+      <p style="font-size:13px;color:#888;margin:24px 0 0;">Adaze</p>
     `,
   });
 
@@ -290,7 +290,7 @@ export function renderDailyDigest(input: DailyDigestInput): EmailPayload {
     const scoreText = j.match_score != null ? ` [${j.match_score}]` : "";
     return `• ${j.title} @ ${j.company}${scoreText}\n  ${j.score_reasoning}\n  ${link}`;
   }).join("\n\n");
-  const text = `Hey ${name},\n\nYour top matches from the last 24 hours:\n\n${jobsText}\n\nDashboard: ${appUrl("/")}\n\n— Adaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
+  const text = `Hey ${name},\n\nYour top matches from the last 24 hours:\n\n${jobsText}\n\nDashboard: ${appUrl("/")}\n\nAdaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
 
   return { to: input.to, subject, html, text, unsubscribeUrl: unsubscribeUrl(input.unsubscribeToken) };
 }
@@ -324,11 +324,11 @@ export function renderSpotlight(input: SpotlightInput): EmailPayload {
       </div>
       <p style="font-size:14px;line-height:1.6;margin:0 0 8px;color:#444;">Open it in your dashboard and we'll tailor your resume + generate a cover letter in about 30 seconds.</p>
       ${button("Open & tailor", input.job.url)}
-      <p style="font-size:13px;color:#888;margin:24px 0 0;">— Adaze</p>
+      <p style="font-size:13px;color:#888;margin:24px 0 0;">Adaze</p>
     `,
   });
 
-  const text = `Hey ${name},\n\nOne job stood out from your queue this week:\n\n${input.job.title}\n${input.job.company}${score != null ? `\nMatch score: ${score}/10` : ""}\n\n${input.job.url}\n\n— Adaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
+  const text = `Hey ${name},\n\nOne job stood out from your queue this week:\n\n${input.job.title}\n${input.job.company}${score != null ? `\nMatch score: ${score}/10` : ""}\n\n${input.job.url}\n\nAdaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
 
   return { to: input.to, subject, html, text, unsubscribeUrl: unsubscribeUrl(input.unsubscribeToken) };
 }
