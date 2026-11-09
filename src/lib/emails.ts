@@ -15,6 +15,10 @@ export type EmailPayload = {
   subject: string;
   html: string;
   text: string;
+  // The user's unsubscribe link. Sent as List-Unsubscribe with
+  // List-Unsubscribe-Post, so mail clients show their own unsubscribe button
+  // and POST to it (RFC 8058); the route accepts that POST.
+  unsubscribeUrl?: string;
 };
 
 export async function sendEmail(payload: EmailPayload): Promise<{ ok: boolean; error?: string }> {
@@ -38,6 +42,14 @@ export async function sendEmail(payload: EmailPayload): Promise<{ ok: boolean; e
       subject: payload.subject,
       html: payload.html,
       text: payload.text,
+      ...(payload.unsubscribeUrl
+        ? {
+            headers: {
+              "List-Unsubscribe": `<${payload.unsubscribeUrl}>`,
+              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            },
+          }
+        : {}),
     }),
   });
 
@@ -153,7 +165,7 @@ export function renderOnboardingReminder(input: OnboardingReminderInput): EmailP
 
   const text = `${greetLine}\n\n${copy.body.replace(/<br\s*\/?>/g, "\n").replace(/<[^>]+>/g, "")}\n\n${copy.cta}: ${cta}\n\n— Adaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
 
-  return { to: input.to, subject, html, text };
+  return { to: input.to, subject, html, text, unsubscribeUrl: unsubscribeUrl(input.unsubscribeToken) };
 }
 
 // ─── Engagement: digest ─────────────────────────────────────────────────────
@@ -214,7 +226,7 @@ export function renderDigest(input: DigestInput): EmailPayload {
     : `The scrapers were quiet ${input.periodLabel}. Worth widening your titles or locations in Settings: ${appUrl("/settings")}`
   }\n\n— Adaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
 
-  return { to: input.to, subject, html, text };
+  return { to: input.to, subject, html, text, unsubscribeUrl: unsubscribeUrl(input.unsubscribeToken) };
 }
 
 // ─── Daily digest (top 5 Haiku-scored matches from last 24h) ────────────────
@@ -280,7 +292,7 @@ export function renderDailyDigest(input: DailyDigestInput): EmailPayload {
   }).join("\n\n");
   const text = `Hey ${name},\n\nYour top matches from the last 24 hours:\n\n${jobsText}\n\nDashboard: ${appUrl("/")}\n\n— Adaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
 
-  return { to: input.to, subject, html, text };
+  return { to: input.to, subject, html, text, unsubscribeUrl: unsubscribeUrl(input.unsubscribeToken) };
 }
 
 // ─── Engagement: spotlight ──────────────────────────────────────────────────
@@ -318,7 +330,7 @@ export function renderSpotlight(input: SpotlightInput): EmailPayload {
 
   const text = `Hey ${name},\n\nOne job stood out from your queue this week:\n\n${input.job.title}\n${input.job.company}${score != null ? `\nMatch score: ${score}/10` : ""}\n\n${input.job.url}\n\n— Adaze\n\nUnsubscribe: ${unsubscribeUrl(input.unsubscribeToken)}`;
 
-  return { to: input.to, subject, html, text };
+  return { to: input.to, subject, html, text, unsubscribeUrl: unsubscribeUrl(input.unsubscribeToken) };
 }
 
 // ─── Utilities ──────────────────────────────────────────────────────────────

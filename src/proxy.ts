@@ -3,6 +3,14 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const publicPaths = ["/login", "/signup", "/api/cron", "/api/subscribe"];
 
+// Routes that receive no session cookie: Stripe's webhook and the unsubscribe
+// link in every email (opened signed out, or POSTed by a mail client as an
+// RFC 8058 one-click request). Matched exactly, with or without a trailing
+// slash, so nothing next to them opens by prefix. /api/gmail/callback stays
+// gated: it takes the user id from an unsigned OAuth state, so the session
+// cookie the browser carries back from Google is the only check on it.
+const exactPublicPaths = new Set(["/api/billing/webhook", "/api/emails/unsubscribe"]);
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -14,6 +22,9 @@ export async function proxy(request: NextRequest) {
 
   // Allow public paths
   if (publicPaths.some((p) => pathname.startsWith(p))) {
+    return NextResponse.next();
+  }
+  if (exactPublicPaths.has(pathname.replace(/\/$/, ""))) {
     return NextResponse.next();
   }
 

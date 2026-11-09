@@ -62,6 +62,13 @@ function skip(summary: CampaignSummary, campaign: string, id: string, reason: st
   summary.skipped += 1;
 }
 
+// The email already went, so it still counts as sent, but a throttle stamp
+// that didn't save means the next run sends it again: an error, not a log line.
+function stampFailed(summary: CampaignSummary, campaign: string, id: string, message: string): void {
+  console.error(`[${campaign}] sent to ${userTag(id)} but the throttle stamp failed: ${message}`);
+  summary.errors.push(`${userTag(id)}: sent, but saving the throttle stamp failed: ${message}`);
+}
+
 // ─── Onboarding reminders ───────────────────────────────────────────────────
 
 const ONBOARDING_CADENCE_DAYS = [1, 3, 7]; // day N after signup per attempt
@@ -126,10 +133,11 @@ export async function processOnboardingReminders(): Promise<CampaignSummary> {
       continue;
     }
 
-    await svc.from("profiles").update({
+    const { error: stampError } = await svc.from("profiles").update({
       onboarding_reminder_count: count + 1,
       onboarding_reminder_last_at: new Date().toISOString(),
     }).eq("id", p.id);
+    if (stampError) stampFailed(summary, "onboarding", p.id, stampError.message);
 
     summary.sent += 1;
   }
@@ -257,9 +265,10 @@ export async function processDailyDigest(): Promise<CampaignSummary> {
       continue;
     }
 
-    await svc.from("profiles").update({
+    const { error: stampError } = await svc.from("profiles").update({
       digest_email_last_at: new Date().toISOString(),
     }).eq("id", p.id);
+    if (stampError) stampFailed(summary, "daily-digest", p.id, stampError.message);
 
     summary.sent += 1;
   }
@@ -366,9 +375,10 @@ export async function processEngagementEmails(): Promise<CampaignSummary> {
       continue;
     }
 
-    await svc.from("profiles").update({
+    const { error: stampError } = await svc.from("profiles").update({
       engagement_email_last_at: new Date().toISOString(),
     }).eq("id", p.id);
+    if (stampError) stampFailed(summary, "engagement", p.id, stampError.message);
 
     summary.sent += 1;
   }

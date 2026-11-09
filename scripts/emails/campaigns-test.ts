@@ -20,7 +20,8 @@
  * Covers: the digest sends with the user's top jobs, every select names real
  * columns, every skip logs its reason (too few matches, no address, throttled),
  * a failed jobs query is an error and not a silent skip, and the engagement
- * nudge carries the user's jobs and apply links.
+ * nudge carries the user's jobs and apply links, every send carries RFC 8058
+ * List-Unsubscribe headers, and a throttle stamp that fails to save is an error.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -129,8 +130,10 @@ const JOBS = [
 // ─── Fake Supabase + captured Resend ────────────────────────────────────────
 
 const schemaErrors: string[] = [];
-const sent: { to: string; subject: string; text: string }[] = [];
+const sent: { to: string; subject: string; text: string; headers?: Record<string, string> }[] = [];
 const patched: { table: string; query: string; body: unknown }[] = [];
+// A profile id whose PATCH answers 500, to check a failed throttle stamp is reported.
+let failPatchFor: string | null = null;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -150,6 +153,9 @@ function postgrest(method: string, url: URL, body: string | undefined): Response
   if (!columns) return json({ code: "42P01", message: `relation public.${table} does not exist` }, 404);
 
   if (method === "PATCH") {
+    if (failPatchFor && url.search.includes(failPatchFor)) {
+      return json({ code: "57014", message: "canceling statement due to statement timeout" }, 500);
+    }
     patched.push({ table, query: url.search, body: body ? JSON.parse(body) : null });
     return new Response(null, { status: 204 });
   }
@@ -210,7 +216,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (url.origin === FAKE_SUPABASE && url.pathname.startsWith("/rest/v1/")) return postgrest(method, url, body);
   if (url.host === "api.resend.com" && method === "POST") {
     const payload = JSON.parse(body ?? "{}");
-    sent.push({ to: payload.to, subject: payload.subject, text: payload.text });
+    sent.push({ to: payload.to, subject: payload.subject, text: payload.text, headers: payload.headers });
     return json({ id: `test-${sent.length}` });
   }
   throw new Error(`test network guard: ${method} ${url.host}${url.pathname} is not faked`);
@@ -258,6 +264,15 @@ async function main(): Promise<void> {
     assert.ok(!mail.text.includes("Role 6 for 1"), "digest stops at 5");
     assert.ok(patched.some((p) => p.table === "profiles" && p.query.includes(ALICE)), "throttle stamped");
   });
+  await check("daily digest: carries one-click List-Unsubscribe headers", () => {
+    const mail = digestSends.find((s) => s.to === EMAILS[ALICE]);
+    assert.ok(mail, "no digest sent to Alice");
+    assert.equal(
+      mail.headers?.["List-Unsubscribe"],
+      `<https://autopilot.example.test/api/emails/unsubscribe?token=unsub-${ALICE.slice(0, 4)}>`,
+    );
+    assert.equal(mail.headers?.["List-Unsubscribe-Post"], "List-Unsubscribe=One-Click");
+  });
   await check("daily digest: only Alice is sent to", () => {
     assert.deepEqual(digestSends.map((s) => s.to), [EMAILS[ALICE]]);
     assert.equal(digest.sent, 1);
@@ -279,7 +294,9 @@ async function main(): Promise<void> {
 
   schemaErrors.length = 0;
   patched.length = 0;
+  failPatchFor = ALICE;
   const engagement = await processEngagementEmails();
+  failPatchFor = null;
   const engagementSends = sent.splice(0);
   logs.splice(0);
 
@@ -295,6 +312,14 @@ async function main(): Promise<void> {
   await check("engagement nudge: a failed jobs query sends nothing", () => {
     assert.ok(!engagementSends.some((s) => s.to === EMAILS[ERIN]), "Erin was sent an empty nudge");
     assert.ok(engagement.errors.some((e) => e.startsWith(userTagOf(ERIN))), `errors: ${JSON.stringify(engagement.errors)}`);
+  });
+
+  await check("engagement nudge: a failed throttle stamp is an error, the send still counts", () => {
+    assert.ok(engagementSends.some((s) => s.to === EMAILS[ALICE]), "Alice was not sent a nudge");
+    const err = engagement.errors.find((e) => e.startsWith(userTagOf(ALICE)));
+    assert.ok(err, `errors: ${JSON.stringify(engagement.errors)}`);
+    assert.match(err, /throttle stamp failed: canceling statement/);
+    assert.equal(engagement.sent, engagementSends.length);
   });
 
   if (failures > 0) {
