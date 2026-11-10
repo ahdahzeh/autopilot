@@ -78,6 +78,10 @@ SOURCE_TIMEOUTS = {
 
 PER_SOURCE_MIN = int(os.getenv("PER_SOURCE_MIN", "15"))
 PER_SOURCE_FACTOR = int(os.getenv("PER_SOURCE_FACTOR", "2"))
+# Browser sources page through results one search at a time, so a big target
+# keeps them paging past their budget, and a timeout drops everything they
+# found (BuiltIn at limit 60 hit 300s on 2026-11-10; at 20 it took 30-45s).
+PER_SOURCE_CAPS = {"builtin": 25, "hiringcafe": 30}
 
 # Global score floor, applied on top of the user's own min_match_score (the
 # max of the two wins). min_match_score defaults to 0 (14 of 17 onboarded
@@ -372,7 +376,7 @@ async def _scrape_inner(req: ScrapeRequest):
             kwargs: dict = {
                 "titles": effective_titles,
                 "locations": req.target_locations,
-                "limit": per_source_limit,
+                "limit": min(per_source_limit, PER_SOURCE_CAPS.get(src_lower, per_source_limit)),
             }
             # Only ATS scrapers take the tracked-companies list. The old code
             # passed companies=None to everyone and re-ran the scraper on
