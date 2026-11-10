@@ -47,8 +47,8 @@ on:
   workflow_dispatch:
     inputs:
       shards:
-        description: "Parallel ingest shards, one scraper each (scheduled runs use 4)"
-        default: "4"
+        description: "Parallel ingest shards, one scraper each (scheduled runs use 8)"
+        default: "8"
         required: false
         type: string
       send_emails:
@@ -61,13 +61,21 @@ on:
         default: false
         required: false
         type: boolean
+      user:
+        description: "Scrape one user only: the 8-character hash from the logs (the app's Find jobs now button sets this)"
+        default: ""
+        required: false
+        type: string
 
 # Nothing here writes to GitHub, so the token gets read-only access.
 permissions:
   contents: read
 
+# One-user runs (the app's Find jobs now) get their own group, so they never
+# wait behind the daily run, and GitHub's one-pending-run-per-group rule
+# cannot cancel one person's run because someone else onboarded a minute later.
 concurrency:
-  group: ingest
+  group: ${{ inputs.user && format('ingest-user-{0}', inputs.user) || 'ingest' }}
   cancel-in-progress: false
 
 jobs:
@@ -82,7 +90,7 @@ jobs:
         env:
           # Empty on scheduled runs (no inputs), so the fallback is the
           # scheduled shard count. Change it here to reshard the daily run.
-          TOTAL: ${{ inputs.shards || '4' }}
+          TOTAL: ${{ inputs.user && '1' || inputs.shards || '8' }}
         run: |
           if ! [[ "$TOTAL" =~ ^[0-9]+$ ]] || [ "$TOTAL" -lt 1 ] || [ "$TOTAL" -gt 20 ]; then
             echo "shards must be an integer from 1 to 20, got '$TOTAL'"
@@ -125,9 +133,22 @@ jobs:
       # produced 76% of every job the product has ever ingested.
       ALLOW_BROWSER_SOURCES: "1"
       PLAYWRIGHT_CONCURRENCY: "2"
-      SOURCE_TIMEOUT_SECONDS: "120"
-      LINKEDIN_TIMEOUT_SECONDS: "180"
-      SCRAPE_TIMEOUT_MS: "600000"
+      # Budgets raised 2026-11-10. Shards were finishing in 5 to 10 minutes of
+      # their 120, while only 1 of 17 users reached their daily limit (117 of
+      # 380 jobs on 2026-10-21) and LinkedIn, the biggest source, ran 6
+      # searches with 3 full reads each. 14 searches with 8 reads each cover
+      # far more of a user's title x location pairs per day.
+      SOURCE_TIMEOUT_SECONDS: "180"
+      LINKEDIN_TIMEOUT_SECONDS: "420"
+      LINKEDIN_MAX_SEARCHES: "14"
+      LINKEDIN_MAX_DETAILS: "8"
+      SCRAPE_TIMEOUT_MS: "900000"
+      # Federal postings (scraper/scrapers/usajobs.py). Free key from
+      # developer.usajobs.gov; without both secrets the source skips itself.
+      USAJOBS_API_KEY: ${{ secrets.USAJOBS_API_KEY }}
+      USAJOBS_EMAIL: ${{ secrets.USAJOBS_EMAIL }}
+      # Set by the app's Find jobs now button: scrape only this user.
+      USER_HASH: ${{ inputs.user }}
       # Matches the scraper's lock of one. Higher only queues requests.
       INGEST_CONCURRENCY: "1"
       # run.ts keeps the users whose sha1(id) lands on this index.
@@ -175,6 +196,16 @@ jobs:
       - name: Run ingest
         run: npx tsx scripts/ingest/run.ts
 
+      # Per-source yield, every run. These lines carry counts, timings and
+      # block warnings only (user search terms log at DEBUG), so they are safe
+      # in this public log. HiringCafe went from 16-19 jobs a day to 0 on
+      # 2026-11-07 and nothing showed why; this is where it will show.
+      - name: Source summary
+        if: always()
+        run: |
+          grep -E "scraped [0-9]+ jobs in|timed out after|[Cc]loudflare|challenge|NYC Jobs done|USAJOBS done|USAJOBS:.*skipping|HiringCafe: .*hits" "$RUNNER_TEMP/scraper.log" \
+            | sed -E 's/^[^|]*\| //' | tail -n 80 || true
+
       # The scraper logs titles and companies as it goes, and this log is
       # public, so it is only shown when something broke and someone has to
       # read it.
@@ -189,7 +220,8 @@ jobs:
     # not depend on ingest at all. (A timed-out job reports as cancelled, so
     # !cancelled() is not a safe substitute.) The trade-off is that a manually
     # cancelled run still sends its emails, unless send_emails was unticked.
-    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.send_emails) }}
+    # A one-user run (Find jobs now) never sends the daily emails.
+    if: ${{ always() && !inputs.user && (github.event_name != 'workflow_dispatch' || inputs.send_emails) }}
     runs-on: ubuntu-latest
     # Three campaigns list every auth user and run a couple of queries per
     # profile, plus one Gmail sync call capped at 2 minutes. Minutes, not hours.

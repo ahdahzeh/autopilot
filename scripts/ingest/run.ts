@@ -114,8 +114,12 @@ async function main(): Promise<void> {
   // Sorted by hash so the order is the same on every runner, then rotated by
   // the day so a shard that hits its timeout does not strand the same tail of
   // users every day. The old Vercel cron shuffled for the same reason.
+  // USER_HASH (set by the app's Find jobs now button through workflow_dispatch)
+  // narrows the run to one person; the workflow runs it as a single shard.
+  const only = (process.env.USER_HASH ?? "").trim().toLowerCase();
+  if (only && !/^[0-9a-f]{8}$/.test(only)) throw new Error(`USER_HASH must be 8 hex characters, got "${only}"`);
   const ids = everyone
-    .filter((id) => shardOf(id, shard.total) === shard.index)
+    .filter((id) => (only ? shortHash(id) === only : shardOf(id, shard.total) === shard.index))
     .sort((a, b) => shortHash(a).localeCompare(shortHash(b)));
   if (ids.length > 1) {
     const offset = Math.floor(Date.now() / 86_400_000) % ids.length;

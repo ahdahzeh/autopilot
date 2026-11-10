@@ -12,7 +12,7 @@ from loguru import logger
 from supabase import create_client
 
 from models import ScrapeRequest
-from scrapers import linkedin, builtin, hiringcafe, greenhouse, lever, ashby, workday
+from scrapers import linkedin, builtin, hiringcafe, greenhouse, lever, ashby, workday, nycjobs, usajobs
 from scrapers.dedup import deduplicate, normalize_company, normalize_title
 from scorer import score_job, is_title_relevant
 from haiku_scorer import rescore_with_haiku
@@ -40,6 +40,10 @@ SCRAPER_MAP = {
     "lever": lever.scrape,
     "ashby": ashby.scrape,
     "workday": workday.scrape,
+    # Government boards (2026-11): NYC Jobs only runs for New York City
+    # targets; USAJOBS needs USAJOBS_API_KEY and USAJOBS_EMAIL.
+    "nycjobs": nycjobs.scrape,
+    "usajobs": usajobs.scrape,
 }
 
 # ATS scrapers iterate user-specified companies rather than running keyword
@@ -68,6 +72,8 @@ SOURCE_TIMEOUTS = {
     "greenhouse": 45,
     "lever": 45,
     "ashby": 45,
+    "nycjobs": 45,
+    "usajobs": 60,
 }
 
 # Global score floor, applied on top of the user's own min_match_score (the

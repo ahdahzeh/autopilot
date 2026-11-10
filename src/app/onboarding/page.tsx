@@ -18,6 +18,8 @@ const SOURCES = [
   { id: "lever", label: "Lever (ATS)" },
   { id: "ashby", label: "Ashby (ATS)" },
   { id: "workday", label: "Company career sites (Workday)" },
+  { id: "nycjobs", label: "NYC government jobs" },
+  { id: "usajobs", label: "US federal jobs (USAJOBS)" },
   { id: "linkedin", label: "LinkedIn" },
 ];
 
@@ -122,6 +124,8 @@ export default function OnboardingPage() {
     "lever",
     "ashby",
     "workday",
+    "nycjobs",
+    "usajobs",
     "linkedin",
   ]);
   const [dailyLimit, setDailyLimit] = useState(20);

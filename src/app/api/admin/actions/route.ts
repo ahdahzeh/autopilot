@@ -1,6 +1,6 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { syncUserGmail } from "@/lib/gmail-sync";
-import { scrapeForUser } from "@/lib/scrape";
+import { dispatchIngestForUser } from "@/lib/dispatch-ingest";
 import { processOnboardingReminders, processEngagementEmails } from "@/lib/email-campaigns";
 import { NextRequest } from "next/server";
 
@@ -67,16 +67,13 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "User not onboarded" }, { status: 400 });
     }
 
-    try {
-      const result = await scrapeForUser(userId);
-      return Response.json(result);
-    } catch (err) {
-      console.error("[admin/actions] scrape failed", err);
-      return Response.json(
-        { error: err instanceof Error ? err.message : "Scrape failed" },
-        { status: 500 },
-      );
+    // Same path as the user's own button: a one-user GitHub Actions run.
+    const dispatched = await dispatchIngestForUser(userId);
+    if (!dispatched.ok) {
+      console.error("[admin/actions] dispatch failed", dispatched.error);
+      return Response.json({ error: dispatched.error }, { status: 502 });
     }
+    return Response.json({ status: "started", note: "Runs on GitHub Actions; jobs land in about 10 to 15 minutes." }, { status: 202 });
   }
 
   return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });

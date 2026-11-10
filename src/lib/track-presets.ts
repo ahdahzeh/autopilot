@@ -38,7 +38,7 @@ const COHORT_LOCATIONS = ["New York, NY", "Remote"];
 
 // Every source with a scraper module, LinkedIn last because it is the
 // slowest and most often throttled (same convention as onboarding).
-const COHORT_SOURCES = ["hiringcafe", "builtin", "greenhouse", "lever", "ashby", "workday", "linkedin"];
+const COHORT_SOURCES = ["hiringcafe", "builtin", "greenhouse", "lever", "ashby", "workday", "nycjobs", "usajobs", "linkedin"];
 
 // The scraper drops a job when its title contains any of these as a
 // case-insensitive substring, with no word boundaries

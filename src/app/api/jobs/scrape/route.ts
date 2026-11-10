@@ -1,18 +1,16 @@
-import { after } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { scrapeForUser } from "@/lib/scrape";
+import { canDispatchIngest, dispatchIngestForUser } from "@/lib/dispatch-ingest";
 
 export const dynamic = "force-dynamic";
-// The actual Railway call runs via after() in the background, but give the
-// function plenty of headroom since a scrape can take 60-120s.
-export const maxDuration = 300;
+
+// A repeat press within this window reuses the run already going.
+const COOLDOWN_MINUTES = 20;
 
 // User-triggered scrape — scrapes jobs for the currently authenticated user.
 //
-// Architecture: do all the cheap precheck work synchronously (auth, profile
-// load, daily limit, Railway URL) so the user gets a real error response if
-// anything is wrong. Only the slow Railway POST runs via after() so the
-// client doesn't have to keep the request open.
+// Architecture: do the cheap prechecks synchronously (auth, profile load,
+// daily limit, cooldown) so the user gets a real error if anything is wrong,
+// then hand the scrape to GitHub Actions and return straight away.
 export async function POST() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -62,24 +60,31 @@ export async function POST() {
     );
   }
 
-  if (!process.env.RAILWAY_SCRAPER_URL) {
+  // The scrape runs as a one-user GitHub Actions run (src/lib/dispatch-ingest.ts),
+  // the same pipeline as the daily ingest. Without a dispatch token the user
+  // still gets an honest answer: their jobs come with the next daily run.
+  if (!canDispatchIngest()) {
     return Response.json(
-      { error: "Scraper URL not configured. Contact admin." },
-      { status: 500 },
+      { status: "scheduled", message: "Your first matches arrive with tomorrow morning's run." },
+      { status: 202 },
     );
   }
 
-  // All prechecks passed — kick off the Railway call in the background and
-  // return immediately so the dashboard can navigate without waiting.
+  const last = profile.on_demand_scrape_at ? new Date(profile.on_demand_scrape_at).getTime() : 0;
+  if (Date.now() - last < COOLDOWN_MINUTES * 60_000) {
+    return Response.json(
+      { status: "running", message: "A search for you is already running. New jobs show up within about 15 minutes." },
+      { status: 202 },
+    );
+  }
+
   const userId = user.id;
-  after(async () => {
-    try {
-      const result = await scrapeForUser(userId);
-      console.log("[scrape/me] completed", result);
-    } catch (err) {
-      console.error("[scrape/me] failed", err);
-    }
-  });
+  const dispatched = await dispatchIngestForUser(userId);
+  if (!dispatched.ok) {
+    console.error("[scrape/me] dispatch failed", dispatched.error);
+    return Response.json({ error: "Could not start a search right now. Try again in a few minutes." }, { status: 502 });
+  }
+  await svc.from("profiles").update({ on_demand_scrape_at: new Date().toISOString() }).eq("id", userId);
 
   return Response.json(
     { status: "started", user_id: userId, remaining },

@@ -21,6 +21,8 @@ const SOURCES = [
   { id: "lever", label: "Lever (ATS)" },
   { id: "ashby", label: "Ashby (ATS)" },
   { id: "workday", label: "Company career sites (Workday)" },
+  { id: "nycjobs", label: "NYC government jobs" },
+  { id: "usajobs", label: "US federal jobs (USAJOBS)" },
   { id: "linkedin", label: "LinkedIn" },
 ];
 const SOURCE_IDS = new Set(SOURCES.map((s) => s.id));
@@ -992,7 +994,7 @@ export default function SettingsPage() {
               <div className="flex-1">
                 <p className="text-sm font-semibold">Daily at 13:00 UTC (9 AM ET / 6 AM PT)</p>
                 <p className="text-[10px] text-muted mt-1">
-                  Fresh jobs are scraped automatically every morning. You can also trigger a scrape manually below. Results will appear on your dashboard in 1 to 2 minutes.
+                  Fresh jobs are scraped automatically every morning. You can also trigger a scrape manually below. New jobs show up on your dashboard in about 10 to 15 minutes.
                 </p>
               </div>
             </div>
