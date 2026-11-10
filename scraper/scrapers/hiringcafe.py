@@ -534,6 +534,48 @@ def unique_specs(locations: Iterable[str]) -> list[LocationSpec]:
     return specs or [LocationSpec("anywhere", "")]
 
 
+class _Browser:
+    """Chromium fallback for when Cloudflare challenges the plain client.
+
+    From 2026-11-07 every request from GitHub's runners got a challenge page
+    (the source had brought 16 to 19 jobs a day before that). A real browser
+    runs the challenge's script and usually gets the results page, whose
+    __NEXT_DATA__ is the same one parse_search_page already reads. Started
+    lazily, so users never pay for it while plain requests work.
+    """
+
+    def __init__(self) -> None:
+        self._pw = None
+        self._browser = None
+        self._page = None
+
+    async def html(self, url: str, wait_s: float = 20.0) -> str:
+        if self._page is None:
+            from playwright.async_api import async_playwright
+
+            self._pw = await async_playwright().start()
+            self._browser = await self._pw.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"]
+            )
+            context = await self._browser.new_context(user_agent=UA, locale="en-US")
+            self._page = await context.new_page()
+        await self._page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        deadline = time.monotonic() + wait_s
+        while True:
+            html = await self._page.content()
+            if not looks_like_challenge(html) or time.monotonic() > deadline:
+                return html
+            await asyncio.sleep(1.5)
+
+    async def close(self) -> None:
+        try:
+            if self._browser:
+                await self._browser.close()
+        finally:
+            if self._pw:
+                await self._pw.stop()
+
+
 async def scrape(titles: list[str], locations: list[str], limit: int = 20) -> list[JobListing]:
     started = time.monotonic()
     specs = unique_specs(locations)
@@ -547,86 +589,102 @@ async def scrape(titles: list[str], locations: list[str], limit: int = 20) -> li
     jobs: list[JobListing] = []
     seen: set[str] = set()
 
-    async with httpx.AsyncClient(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as client:
-        for i, (title, spec) in enumerate(pairs, 1):
-            if len(jobs) >= limit:
-                break
-            url = search_url(search_state(title, spec))
-            logger.debug(f"  HiringCafe search {i}: '{title}' in '{spec.label or 'anywhere'}' ({spec.kind})")
-
-            hits: list[dict] | None = None
-            challenged = False
-            # One retry: a challenge or a dropped connection is sometimes a
-            # single bad request rather than a blocked session.
-            for attempt in range(2):
-                try:
-                    resp = await _get(client, url)
-                except httpx.HTTPError as e:
-                    # The URL (and so the user's title) is part of the message.
-                    logger.warning(f"  HiringCafe search {i}: request failed ({type(e).__name__})")
-                    logger.debug(f"  HiringCafe search {i}: {e}")
-                    await asyncio.sleep(2)
-                    continue
-                if looks_like_challenge(resp.text, resp.headers):
-                    challenged = True
-                    await asyncio.sleep(5)
-                    continue
-                if resp.status_code != 200:
-                    logger.warning(f"  HiringCafe search {i}: HTTP {resp.status_code}")
-                    break
-                try:
-                    hits = parse_search_page(resp.text)
-                    challenged = False
-                except ChallengePage:
-                    challenged = True
-                    await asyncio.sleep(5)
-                    continue
-                except (ValueError, json.JSONDecodeError) as e:
-                    logger.warning(f"  HiringCafe search {i}: could not read results ({e})")
-                break
-
-            if challenged:
-                logger.warning(
-                    "HiringCafe: Cloudflare challenge page returned twice; stopping this source "
-                    "so the feed gets nothing rather than junk"
-                )
-                break
-            if hits is None:
-                await asyncio.sleep(random.uniform(0.5, 1.5))
-                continue
-
-            fresh = matched = new = 0
-            for hit in hits:
+    browser = _Browser()
+    used_browser = False
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as client:
+            for i, (title, spec) in enumerate(pairs, 1):
                 if len(jobs) >= limit:
                     break
-                # Age first: the server ignores the date window we send, and a
-                # hit without a date is kept rather than guessed at.
-                days = posted_days_ago(hit, now)
-                if days is not None and days > DAYS_BACK:
+                url = search_url(search_state(title, spec))
+                logger.debug(f"  HiringCafe search {i}: '{title}' in '{spec.label or 'anywhere'}' ({spec.kind})")
+
+                hits: list[dict] | None = None
+                challenged = False
+                # One retry: a challenge or a dropped connection is sometimes a
+                # single bad request rather than a blocked session.
+                for attempt in range(2):
+                    try:
+                        resp = await _get(client, url)
+                    except httpx.HTTPError as e:
+                        # The URL (and so the user's title) is part of the message.
+                        logger.warning(f"  HiringCafe search {i}: request failed ({type(e).__name__})")
+                        logger.debug(f"  HiringCafe search {i}: {e}")
+                        await asyncio.sleep(2)
+                        continue
+                    if looks_like_challenge(resp.text, resp.headers):
+                        challenged = True
+                        await asyncio.sleep(5)
+                        continue
+                    if resp.status_code != 200:
+                        logger.warning(f"  HiringCafe search {i}: HTTP {resp.status_code}")
+                        break
+                    try:
+                        hits = parse_search_page(resp.text)
+                        challenged = False
+                    except ChallengePage:
+                        challenged = True
+                        await asyncio.sleep(5)
+                        continue
+                    except (ValueError, json.JSONDecodeError) as e:
+                        logger.warning(f"  HiringCafe search {i}: could not read results ({e})")
+                    break
+
+                if challenged:
+                    try:
+                        hits = parse_search_page(await browser.html(url))
+                        challenged = False
+                        if not used_browser:
+                            logger.info("HiringCafe: plain requests were challenged; reading through a browser")
+                            used_browser = True
+                    except ChallengePage:
+                        pass
+                    except Exception as e:
+                        logger.warning(f"  HiringCafe search {i}: browser read failed ({type(e).__name__})")
+                if challenged:
+                    logger.warning(
+                        "HiringCafe: Cloudflare challenge page returned twice and in a browser; stopping this "
+                        "source so the feed gets nothing rather than junk"
+                    )
+                    break
+                if hits is None:
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
                     continue
-                fresh += 1
-                info = hit.get("job_information") or {}
-                v5 = hit.get("v5_processed_job_data") or {}
-                if not matches_title(title, info.get("title") or "", v5.get("core_job_title") or ""):
-                    continue
-                if not matches_location(hit, spec):
-                    continue
-                matched += 1
-                job = hit_to_job(hit)
-                if job is None:
-                    continue
-                key = job.apply_url.lower()
-                if key in seen or job.id in seen:
-                    continue
-                seen.add(key)
-                seen.add(job.id)
-                jobs.append(job)
-                new += 1
-            logger.info(
-                f"  HiringCafe search {i}/{len(pairs)}: {len(hits)} hits, {fresh} within {DAYS_BACK} days, "
-                f"{matched} on target, {new} new"
-            )
-            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+                fresh = matched = new = 0
+                for hit in hits:
+                    if len(jobs) >= limit:
+                        break
+                    # Age first: the server ignores the date window we send, and a
+                    # hit without a date is kept rather than guessed at.
+                    days = posted_days_ago(hit, now)
+                    if days is not None and days > DAYS_BACK:
+                        continue
+                    fresh += 1
+                    info = hit.get("job_information") or {}
+                    v5 = hit.get("v5_processed_job_data") or {}
+                    if not matches_title(title, info.get("title") or "", v5.get("core_job_title") or ""):
+                        continue
+                    if not matches_location(hit, spec):
+                        continue
+                    matched += 1
+                    job = hit_to_job(hit)
+                    if job is None:
+                        continue
+                    key = job.apply_url.lower()
+                    if key in seen or job.id in seen:
+                        continue
+                    seen.add(key)
+                    seen.add(job.id)
+                    jobs.append(job)
+                    new += 1
+                logger.info(
+                    f"  HiringCafe search {i}/{len(pairs)}: {len(hits)} hits, {fresh} within {DAYS_BACK} days, "
+                    f"{matched} on target, {new} new"
+                )
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+    finally:
+        await browser.close()
 
     logger.info(f"HiringCafe done: {len(jobs)} jobs in {time.monotonic() - started:.1f}s")
     return jobs

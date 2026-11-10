@@ -76,6 +76,9 @@ SOURCE_TIMEOUTS = {
     "usajobs": 60,
 }
 
+PER_SOURCE_MIN = int(os.getenv("PER_SOURCE_MIN", "15"))
+PER_SOURCE_FACTOR = int(os.getenv("PER_SOURCE_FACTOR", "2"))
+
 # Global score floor, applied on top of the user's own min_match_score (the
 # max of the two wins). min_match_score defaults to 0 (14 of 17 onboarded
 # users never changed it), so until 2026-10-20 every scored job was inserted:
@@ -339,7 +342,13 @@ async def _scrape_inner(req: ScrapeRequest):
     # timeout means LinkedIn hanging doesn't starve anyone else, AND the whole
     # pass finishes inside the request window.
     all_jobs = []
-    per_source_limit = max(5, req.daily_job_limit // len(req.sources)) if req.sources else req.daily_job_limit
+    # Each source over-fetches; the user's daily limit is applied once, after
+    # dedup and every filter. The old split (daily limit / number of sources,
+    # at least 5) asked each source for 5 jobs once a user had 9 sources, and
+    # dedup against their history plus the location, title and score filters
+    # kept 3 to 7 of those: on 2026-11-10 every source stopped at exactly 5
+    # while users with room for 20 got a handful.
+    per_source_limit = max(PER_SOURCE_MIN, req.daily_job_limit * PER_SOURCE_FACTOR)
 
     # Shared across all _run_one coroutines in this request — limits how
     # many browser-launching scrapers run at once.

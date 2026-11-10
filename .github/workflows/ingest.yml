@@ -138,7 +138,7 @@ jobs:
       # 380 jobs on 2026-10-21) and LinkedIn, the biggest source, ran 6
       # searches with 3 full reads each. 14 searches with 8 reads each cover
       # far more of a user's title x location pairs per day.
-      SOURCE_TIMEOUT_SECONDS: "180"
+      SOURCE_TIMEOUT_SECONDS: "300"
       LINKEDIN_TIMEOUT_SECONDS: "420"
       LINKEDIN_MAX_SEARCHES: "14"
       LINKEDIN_MAX_DETAILS: "8"

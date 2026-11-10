@@ -427,7 +427,24 @@ def test_scrape_keeps_hits_that_carry_no_date(monkeypatch):
     assert {j.company for j in jobs} == {"Lehman College", "Colure Health"}
 
 
-def test_scrape_returns_nothing_on_a_cloudflare_challenge(monkeypatch):
+def _stub_browser(monkeypatch, html):
+    """The Chromium fallback, without a browser or the network."""
+    seen = []
+
+    async def fake_html(self, url, wait_s=20.0):
+        seen.append(url)
+        return html
+
+    async def fake_close(self):
+        return None
+
+    monkeypatch.setattr(hiringcafe._Browser, "html", fake_html)
+    monkeypatch.setattr(hiringcafe._Browser, "close", fake_close)
+    return seen
+
+
+def test_scrape_returns_nothing_when_the_browser_is_challenged_too(monkeypatch):
+    browser_calls = _stub_browser(monkeypatch, CHALLENGE_HTML)
     jobs, calls = run_scrape(
         monkeypatch,
         [FakeResponse(CHALLENGE_HTML, status_code=403, headers={"cf-mitigated": "challenge"})],
@@ -435,8 +452,21 @@ def test_scrape_returns_nothing_on_a_cloudflare_challenge(monkeypatch):
         ["New York"],
     )
     assert jobs == []
-    # One retry, then the source stops instead of hammering the site.
+    # One retry, one browser read, then the source stops instead of hammering the site.
     assert len(calls) == 2
+    assert len(browser_calls) == 1
+
+
+def test_scrape_reads_through_the_browser_when_plain_requests_are_challenged(monkeypatch):
+    browser_calls = _stub_browser(monkeypatch, SEARCH_HTML)
+    jobs, calls = run_scrape(
+        monkeypatch,
+        [FakeResponse(CHALLENGE_HTML, status_code=403, headers={"cf-mitigated": "challenge"})],
+        ["IT Support Specialist"],
+        ["New York"],
+    )
+    assert len(calls) == 2 and len(browser_calls) == 1
+    assert {j.company for j in jobs} == {"Lehman College", "Colure Health"}
 
 
 def test_scrape_skips_unparseable_pages_and_continues(monkeypatch):
